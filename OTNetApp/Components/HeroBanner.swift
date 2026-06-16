@@ -34,9 +34,13 @@ private struct HeroSlide: View {
                 AsyncImage(url: item.landscapeURL ?? item.posterURL) { phase in
                     switch phase {
                     case .success(let img):
-                        img.resizable().scaledToFill()
+                        img.resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+                            .clipped()
                     default:
                         Rectangle().fill(OTNetTheme.card)
+                            .frame(width: geo.size.width, height: geo.size.height)
                     }
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
@@ -48,7 +52,7 @@ private struct HeroSlide: View {
                 )
                 .frame(width: geo.size.width, height: geo.size.height)
 
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 10) {
                     if let url = item.titleImageURL {
                         AsyncImage(url: url) { phase in
                             if case .success(let img) = phase {
@@ -65,8 +69,9 @@ private struct HeroSlide: View {
                             .shadow(color: .black.opacity(0.6), radius: 6)
                             .lineLimit(2)
                     }
-                    if let synopsis = item.description, !synopsis.isEmpty {
-                        Text(synopsis)
+                    ContentMetaStrip(item: item)
+                    if let description = item.description, !description.isEmpty {
+                        Text(description)
                             .font(.subheadline)
                             .foregroundStyle(OTNetTheme.textSecondary)
                             .lineLimit(2)
@@ -79,7 +84,7 @@ private struct HeroSlide: View {
                             .padding(.vertical, 10)
                             .background(OTNetTheme.primary, in: RoundedRectangle(cornerRadius: 8))
                             .foregroundStyle(.white)
-                        if let rating = item.ageRating {
+                        if let rating = item.ageRating, !rating.isEmpty {
                             AgeRatingBadge(rating: rating)
                         }
                     }
@@ -92,3 +97,4 @@ private struct HeroSlide: View {
         }
     }
 }
+

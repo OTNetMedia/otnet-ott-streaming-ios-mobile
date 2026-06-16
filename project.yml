@@ -5,6 +5,10 @@ options:
     iOS: "16.0"
   createIntermediateGroups: true
 
+configFiles:
+  Debug: Signing.local.xcconfig
+  Release: Signing.local.xcconfig
+
 settings:
   base:
     SWIFT_VERSION: "5.9"
