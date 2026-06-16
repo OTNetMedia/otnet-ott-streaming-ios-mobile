@@ -34,8 +34,22 @@ struct HomeView: View {
         }
         .background(OTNetTheme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        .overlay(alignment: .topTrailing) {
+            NavigationLink(value: SearchRoute()) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .background(.black.opacity(0.55), in: Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.15), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.4), radius: 6, y: 2)
+            }
+            .padding(.trailing, 16)
+            .padding(.top, 8)
+        }
         .navigationDestination(for: Content.self) { ContentDetailView(content: $0) }
         .navigationDestination(for: Genre.self) { CategoryDetailView(category: $0) }
+        .navigationDestination(for: SearchRoute.self) { _ in SearchView() }
         .task { await vm.load() }
         .refreshable { await vm.load() }
     }

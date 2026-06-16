@@ -4,8 +4,13 @@ struct ContentDetailView: View {
     let content: Content
     @State private var showingPlayer = false
     @StateObject private var vm = ContentDetailViewModel()
+    @EnvironmentObject private var myList: MyListStore
+    @EnvironmentObject private var auth: AuthStore
+    @EnvironmentObject private var settingsStore: SettingsStore
 
     private var displayed: Content { vm.detail ?? content }
+    private var viewerAuthRequired: Bool { !(settingsStore.settings?.viewerAuthNone ?? false) }
+    private var canUseList: Bool { viewerAuthRequired && auth.isSignedIn }
 
     @Environment(\.dismiss) private var dismiss
 
@@ -138,24 +143,35 @@ struct ContentDetailView: View {
     }
 
     private var playButton: some View {
-        HStack(spacing: 8) {
-            Button {
-                showingPlayer = true
-            } label: {
-                Label("Play", systemImage: "play.fill")
-                    .bold()
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 12)
+        HStack(spacing: 12) {
+            PlayButton { showingPlayer = true }
+
+            if canUseList {
+                MyListButton(
+                    isInList: myList.contains(displayed.id),
+                    isPending: myList.isPending(displayed.id)
+                ) {
+                    Task { await toggleMyList() }
+                }
             }
-            .buttonStyle(.borderedProminent)
-            .tint(OTNetTheme.primary)
 
             if let rating = displayed.ageRating, !rating.isEmpty {
                 AgeRatingBadge(rating: rating)
             }
+
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 20)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func toggleMyList() async {
+        let idx = auth.activeProfileIndex
+        if myList.contains(displayed.id) {
+            await myList.remove(displayed.id, profileIndex: idx)
+        } else {
+            await myList.add(displayed, profileIndex: idx)
+        }
     }
 
     private var castMembers: [Personnel] {

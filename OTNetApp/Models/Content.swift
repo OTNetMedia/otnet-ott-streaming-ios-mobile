@@ -24,6 +24,7 @@ struct Content: Codable, Identifiable {
     let personnel: [Personnel]?
     let contentAdvisory: [String]?
     let venue: String?
+    let teaser: String?
 
     var displayTitle: String { title ?? "Untitled" }
     var firstMedia: MediaItem? { media?.first }
@@ -66,7 +67,17 @@ struct Content: Codable, Identifiable {
         case childCount, sortOrder, parent, genres
         case entitled, paywall, monetization
         case date, primaryGroup, secondaryGroup, organization, metadata
-        case personnel, contentAdvisory, venue
+        case personnel, contentAdvisory, venue, teaser
+    }
+
+    /// AVPlayer-compatible teaser URL. We only return a value when the publisher
+    /// has set an HLS (.m3u8) URL — DASH (.mpd) cannot play natively on iOS.
+    var teaserHLSURL: URL? {
+        guard let s = teaser, !s.isEmpty,
+              let url = URL(string: s) else { return nil }
+        let lower = url.absoluteString.lowercased()
+        guard lower.contains(".m3u8") else { return nil }
+        return url
     }
 }
 
@@ -99,7 +110,28 @@ struct GroupRef: Codable, Hashable {
     let id: String?
     let name: String?
     let logo: String?
+
     enum CodingKeys: String, CodingKey { case id = "_id", name, logo }
+
+    init(from decoder: Decoder) throws {
+        if let single = try? decoder.singleValueContainer().decode(String.self) {
+            self.id = single
+            self.name = nil
+            self.logo = nil
+            return
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decodeIfPresent(String.self, forKey: .id)
+        self.name = try c.decodeIfPresent(String.self, forKey: .name)
+        self.logo = try c.decodeIfPresent(String.self, forKey: .logo)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(id, forKey: .id)
+        try c.encodeIfPresent(name, forKey: .name)
+        try c.encodeIfPresent(logo, forKey: .logo)
+    }
 }
 
 struct MetadataItem: Codable, Hashable {

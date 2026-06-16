@@ -36,7 +36,19 @@ struct BrowseView: View {
         }
         .background(OTNetTheme.background.ignoresSafeArea())
         .navigationTitle("Browse")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink(value: SearchRoute()) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(OTNetTheme.textPrimary)
+                }
+            }
+        }
         .navigationDestination(for: Genre.self) { CategoryDetailView(category: $0) }
+        .navigationDestination(for: SearchRoute.self) { _ in SearchView() }
         .task { await vm.load() }
     }
 }
+
+struct SearchRoute: Hashable {}

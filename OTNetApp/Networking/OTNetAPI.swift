@@ -11,6 +11,7 @@ actor OTNetAPI {
         return d
     }()
     private let encoder = JSONEncoder()
+    private var viewerToken: String?
 
     init() {
         precondition(
@@ -19,10 +20,17 @@ actor OTNetAPI {
         )
     }
 
+    func setViewerToken(_ token: String?) {
+        self.viewerToken = token
+    }
+
     func get<T: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws -> T {
         let url = try makeURL(path: path, query: query)
         var request = URLRequest(url: url)
         request.setValue(apiKey, forHTTPHeaderField: "X-Api-Key")
+        if let viewerToken {
+            request.setValue("Bearer \(viewerToken)", forHTTPHeaderField: "Authorization")
+        }
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         DebugProbe.log(url, status: status, bytes: data.count, decoded: String(describing: T.self))
@@ -37,6 +45,9 @@ actor OTNetAPI {
         req.httpMethod = "POST"
         req.setValue(apiKey, forHTTPHeaderField: "X-Api-Key")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let viewerToken {
+            req.setValue("Bearer \(viewerToken)", forHTTPHeaderField: "Authorization")
+        }
         req.httpBody = try encoder.encode(body)
         let (data, response) = try await session.data(for: req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -87,6 +98,14 @@ extension OTNetAPI {
         return try await get("/catalog/content/category/\(categoryId)", query: q)
     }
 
+    func searchContent(_ query: String, limit: Int = 40) async throws -> CategoryPage {
+        let q = [
+            URLQueryItem(name: "search", value: query),
+            URLQueryItem(name: "limit",  value: String(limit)),
+        ]
+        return try await get("/catalog/content", query: q)
+    }
+
     func person(id: String) async throws -> PersonProfile {
         try await get("/catalog/people/\(id)")
     }
@@ -114,6 +133,95 @@ extension OTNetAPI {
 
     func settings() async throws -> PublisherSettings {
         try await get("/catalog/settings")
+    }
+
+    // MARK: - Viewer auth
+
+    func register(email: String, password: String, displayName: String) async throws -> AuthResponse {
+        struct Req: Encodable { let email: String; let password: String; let displayName: String }
+        return try await post("/viewer/auth/register",
+                              body: Req(email: email, password: password, displayName: displayName))
+    }
+
+    func login(email: String, password: String) async throws -> AuthResponse {
+        struct Req: Encodable { let email: String; let password: String }
+        return try await post("/viewer/auth/login", body: Req(email: email, password: password))
+    }
+
+    func refreshAuth(refreshToken: String) async throws -> RefreshResponse {
+        struct Req: Encodable { let refreshToken: String }
+        return try await post("/viewer/auth/refresh", body: Req(refreshToken: refreshToken))
+    }
+
+    func logout() async {
+        struct Req: Encodable {}
+        struct Empty: Decodable {}
+        do { let _: Empty = try await post("/viewer/auth/logout", body: Req()) }
+        catch { DebugProbe.log("logout failed: \(error)") }
+    }
+
+    // MARK: - Viewer profiles
+
+    func profiles() async throws -> ProfilesResponse {
+        try await get("/viewer/profiles")
+    }
+
+    func createProfile(name: String, avatar: String?, kids: Bool) async throws -> ProfilesResponse {
+        struct Req: Encodable { let name: String; let avatar: String?; let kids: Bool }
+        return try await post("/viewer/profiles",
+                              body: Req(name: name, avatar: avatar, kids: kids))
+    }
+
+    func updateProfile(index: Int, name: String?, avatar: String?, kids: Bool?) async throws -> ProfilesResponse {
+        struct Req: Encodable { let index: Int; let name: String?; let avatar: String?; let kids: Bool? }
+        return try await send("PATCH", "/viewer/profiles",
+                              body: Req(index: index, name: name, avatar: avatar, kids: kids))
+    }
+
+    func deleteProfile(index: Int) async throws -> ProfilesResponse {
+        struct Req: Encodable { let index: Int }
+        return try await send("DELETE", "/viewer/profiles", body: Req(index: index))
+    }
+
+    // MARK: - Viewer list (My List)
+
+    func myList(profileIndex: Int) async throws -> ViewerListResponse {
+        try await get("/viewer/list",
+                      query: [URLQueryItem(name: "profileIndex", value: String(profileIndex))])
+    }
+
+    func addToList(contentId: String, profileIndex: Int) async throws {
+        struct Req: Encodable { let contentId: String; let profileIndex: Int }
+        struct Ack: Decodable { let success: Bool? }
+        let _: Ack = try await post("/viewer/list",
+                                    body: Req(contentId: contentId, profileIndex: profileIndex))
+    }
+
+    func removeFromList(contentId: String, profileIndex: Int) async throws {
+        struct Req: Encodable { let contentId: String; let profileIndex: Int }
+        struct Ack: Decodable { let success: Bool? }
+        let _: Ack = try await send("DELETE", "/viewer/list",
+                                    body: Req(contentId: contentId, profileIndex: profileIndex))
+    }
+
+    /// Same plumbing as `post`, parameterised by HTTP method (used for PATCH/DELETE
+    /// since both carry a JSON body on the profiles endpoint).
+    func send<Body: Encodable, T: Decodable>(_ method: String, _ path: String, body: Body) async throws -> T {
+        let url = try makeURL(path: path)
+        var req = URLRequest(url: url)
+        req.httpMethod = method
+        req.setValue(apiKey, forHTTPHeaderField: "X-Api-Key")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let viewerToken {
+            req.setValue("Bearer \(viewerToken)", forHTTPHeaderField: "Authorization")
+        }
+        req.httpBody = try encoder.encode(body)
+        let (data, response) = try await session.data(for: req)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+        DebugProbe.log(url, status: status, bytes: data.count, decoded: String(describing: T.self))
+        guard (200..<300).contains(status) else { throw APIError.http(status) }
+        do { return try decoder.decode(T.self, from: data) }
+        catch { throw APIError.decoding(error) }
     }
 
     /// Mint a playback session. Returns the HLS master URL conditioned for

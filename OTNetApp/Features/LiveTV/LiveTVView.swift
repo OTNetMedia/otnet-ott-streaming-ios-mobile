@@ -38,7 +38,7 @@ struct LiveTVView: View {
                 entitled: true, paywall: nil, monetization: nil,
                 date: nil, primaryGroup: nil, secondaryGroup: nil,
                 organization: nil, metadata: nil, personnel: nil,
-                contentAdvisory: nil, venue: nil
+                contentAdvisory: nil, venue: nil, teaser: nil
             )
             PlayerView(content: stub, mode: .live).ignoresSafeArea()
         }
@@ -50,13 +50,16 @@ private struct EPGGrid: View {
     let now: Date
     let onPlay: (EPGChannelInfo) -> Void
 
-    private let pxPerMin: CGFloat = 5
+    private let pxPerMin: CGFloat = 22
     private let slotMin: Int = 30
     private let pastHours: Int = 1
     private let futureHours: Int = 12
-    private let railWidth: CGFloat = 96
-    private let rowHeight: CGFloat = 84
-    private let headerHeight: CGFloat = 32
+    private let railWidth: CGFloat = 156
+    private let rowHeight: CGFloat = 92
+    private let headerHeight: CGFloat = 44
+    private let tileMinWidth: CGFloat = 8
+    private let tileGap: CGFloat = 3
+    private let logoSize: CGFloat = 48
 
     private var startMs: TimeInterval {
         let mins = floor(now.timeIntervalSince1970 / 60.0)
@@ -92,7 +95,7 @@ private struct EPGGrid: View {
                                     Divider().background(OTNetTheme.border.opacity(0.4))
                                 }
                             }
-                            .background(
+                            .overlay(
                                 nowLine
                                     .id("now"),
                                 alignment: .topLeading
@@ -125,34 +128,45 @@ private struct EPGGrid: View {
     }
 
     private func railCell(channel: EPGChannel) -> some View {
-        HStack(spacing: 8) {
-            AsyncImage(url: channel.channel?.logoURL) { phase in
-                if case .success(let img) = phase {
-                    img.resizable().aspectRatio(contentMode: .fit)
-                } else {
-                    Image(systemName: "tv")
-                        .foregroundStyle(OTNetTheme.textTertiary)
+        HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.black.opacity(0.45))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(.white.opacity(0.08), lineWidth: 1)
+                    )
+                AsyncImage(url: channel.channel?.logoURL) { phase in
+                    if case .success(let img) = phase {
+                        img.resizable().aspectRatio(contentMode: .fit)
+                    } else {
+                        Image(systemName: "tv")
+                            .font(.system(size: 18))
+                            .foregroundStyle(OTNetTheme.textTertiary)
+                    }
                 }
+                .padding(4)
             }
-            .frame(width: 40, height: 40)
-            .padding(4)
-            .background(Color.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+            .frame(width: logoSize, height: logoSize)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 if let num = channel.channel?.channelNumber {
                     Text("CH \(num)")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: 10, weight: .heavy))
+                        .tracking(0.6)
                         .foregroundStyle(OTNetTheme.textTertiary)
                 }
                 Text(channel.channel?.name ?? "Channel")
-                    .font(.caption2.weight(.semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(OTNetTheme.textPrimary)
                     .lineLimit(2)
+                    .truncationMode(.tail)
                     .multilineTextAlignment(.leading)
             }
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 8)
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
         .frame(width: railWidth, height: rowHeight, alignment: .leading)
         .contentShape(Rectangle())
     }
@@ -213,7 +227,8 @@ private struct EPGGrid: View {
             let cs = max(pStart, startMs)
             let ce = min(pEnd, endMs)
             let left = CGFloat((cs - startMs) / 60) * pxPerMin
-            let width = max(60, CGFloat((ce - cs) / 60) * pxPerMin - 3)
+            let natural = CGFloat((ce - cs) / 60) * pxPerMin - tileGap
+            let width = max(tileMinWidth, natural)
             let isLive = pStart <= now.timeIntervalSince1970 && pEnd > now.timeIntervalSince1970
             let progress = isLive ? CGFloat((now.timeIntervalSince1970 - pStart) / (pEnd - pStart)) : 0
             let subtitle = subtitle(for: program)
@@ -240,21 +255,25 @@ private struct EPGGrid: View {
     }
 
     private var nowLine: some View {
-        Rectangle()
-            .fill(Color.red)
-            .frame(width: 2,
-                   height: CGFloat(channels.count) * (rowHeight + 1) + headerHeight)
-            .offset(x: nowOffset)
-            .overlay(alignment: .top) {
-                Text(timeFmt.string(from: now))
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(Color.red, in: Capsule())
-                    .offset(x: nowOffset - 18, y: -2)
-            }
-            .allowsHitTesting(false)
+        ZStack(alignment: .topLeading) {
+            Rectangle()
+                .fill(Color.red)
+                .frame(width: 2,
+                       height: CGFloat(channels.count) * (rowHeight + 1) + headerHeight)
+                .offset(x: nowOffset)
+
+            Text(timeFmt.string(from: now))
+                .font(.system(size: 12, weight: .heavy).monospacedDigit())
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.red, in: Capsule())
+                .overlay(Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 1))
+                .fixedSize()
+                .offset(x: nowOffset - 26, y: 6)
+                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -264,6 +283,11 @@ private struct ProgramTile: View {
     let isLive: Bool
     let progress: CGFloat
     let width: CGFloat
+
+    private var showTitle: Bool { width >= 52 }
+    private var showSubtitle: Bool { width >= 130 }
+    private var titleLines: Int { width >= 110 ? 2 : 1 }
+    private var horizontalPadding: CGFloat { width >= 60 ? 8 : 4 }
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -276,19 +300,22 @@ private struct ProgramTile: View {
                 )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(OTNetTheme.textPrimary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                if width > 110, let subtitle {
+                if showTitle {
+                    Text(title)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(OTNetTheme.textPrimary)
+                        .lineLimit(titleLines)
+                        .truncationMode(.tail)
+                        .multilineTextAlignment(.leading)
+                }
+                if showSubtitle, let subtitle {
                     Text(subtitle)
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(OTNetTheme.textSecondary)
                         .lineLimit(1)
                 }
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, horizontalPadding)
             .padding(.vertical, 6)
             .frame(width: width, alignment: .leading)
 
