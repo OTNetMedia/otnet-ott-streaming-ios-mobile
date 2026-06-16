@@ -1,0 +1,69 @@
+# Secrets — never commit anything with real keys
+OTNetApp/Networking/Secrets.swift
+*.xcconfig
+!*.example.xcconfig
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcuserdatad/
+*.moved-aside
+*.xccheckout
+*.xcscmblueprint
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.swiftpm/
+.build/
+Packages/
+Package.pins
+Package.resolved
+
+# Xcode project — regenerated from project.yml via `xcodegen`
+OTNetApp.xcodeproj/
+
+# CocoaPods (defensive)
+Pods/
+
+# Carthage (defensive)
+Carthage/Build/
+
+# IDE / editors
+.idea/
+.vscode/
+*.swp
+*.swo
+.history/
+
+# macOS / Windows junk
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Misc
+*.local
+
+# Claude / AI assistant artefacts
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+.cursor/
+.aider*
+.continue/
