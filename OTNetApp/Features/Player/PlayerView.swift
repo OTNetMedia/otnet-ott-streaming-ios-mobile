@@ -2,32 +2,60 @@ import AVKit
 import SwiftUI
 import UIKit
 
-struct PlayerView: UIViewControllerRepresentable {
+struct PlayerView: View {
     let content: Content
-    var contextDescription: String? = nil
 
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let vc = AVPlayerViewController()
-        vc.allowsPictureInPicturePlayback = true
-        vc.entersFullScreenWhenPlaybackBegins = true
-        vc.modalPresentationStyle = .fullScreen
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [])
-        try? AVAudioSession.sharedInstance().setActive(true)
-        Task { await configure(vc) }
-        return vc
+    @State private var state: PlayerState = .loading
+    @State private var keyDelegate: FairPlayKeyDelegate?
+    @State private var keySession: AVContentKeySession?
+
+    enum PlayerState {
+        case loading
+        case ready(AVPlayer)
+        case error(String)
     }
 
-    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {}
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            switch state {
+            case .loading:
+                VStack(spacing: 12) {
+                    ProgressView().tint(.white)
+                    Text("Preparing playback…")
+                        .foregroundStyle(.white.opacity(0.7))
+                        .font(.footnote)
+                }
+            case .ready(let player):
+                PlayerHost(player: player).ignoresSafeArea()
+            case .error(let message):
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.largeTitle)
+                        .foregroundStyle(.orange)
+                    Text(message)
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                }
+            }
+        }
+        .task(id: content.id) { await load() }
+    }
 
-    @MainActor
-    private func configure(_ vc: AVPlayerViewController) async {
+    private func load() async {
+        DebugProbe.log("PlayerView.load() starting for contentId=\(content.id)")
         do {
-            let mint = try await OTNetAPI.shared.mintPlayback(contentId: content.id, protocolName: "hls")
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [])
+            try? AVAudioSession.sharedInstance().setActive(true)
 
+            let mint = try await OTNetAPI.shared.mintPlayback(contentId: content.id, protocolName: "hls")
             guard let url = URL(string: mint.playback.masterUrl) else {
                 throw APIError.invalidURL
             }
+            DebugProbe.log("masterUrl=\(url.absoluteString)")
 
+            let player: AVPlayer
             if let fairplay = mint.playback.drm?.fairplay,
                let certURL = URL(string: fairplay.certificateUrl) {
                 guard var components = URLComponents(string: "https://otnet.io/api/v1/playback/drm/license") else {
@@ -40,36 +68,52 @@ struct PlayerView: UIViewControllerRepresentable {
                 guard let licenseURL = components.url else {
                     throw APIError.invalidURL
                 }
+                DebugProbe.log("FairPlay licenseURL=\(licenseURL.absoluteString.prefix(120))…")
+                DebugProbe.log("FairPlay certURL=\(certURL.absoluteString)")
 
-                let keySession = AVContentKeySession(keySystem: .fairPlayStreaming)
                 let delegate = FairPlayKeyDelegate(
                     licenseURL: licenseURL,
                     certificateURL: certURL,
                     onError: { err in
-                        Task {
+                        Task { @MainActor in
+                            DebugProbe.log("FairPlay onError: \(err.localizedDescription)")
                             await reportError(code: "drm-license-failure",
                                               category: "drm",
                                               message: err.localizedDescription,
                                               severity: "critical")
+                            state = .error("DRM failed: \(err.localizedDescription)")
                         }
                     }
                 )
-                keySession.setDelegate(delegate, queue: .main)
+                let session = AVContentKeySession(keySystem: .fairPlayStreaming)
+                session.setDelegate(delegate, queue: .main)
 
                 let asset = AVURLAsset(url: url)
-                keySession.addContentKeyRecipient(asset)
-                vc.player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
-                objc_setAssociatedObject(vc, AssocKeys.keySession, keySession, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-                objc_setAssociatedObject(vc, AssocKeys.delegate,  delegate,   .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+                session.addContentKeyRecipient(asset)
+
+                self.keyDelegate = delegate
+                self.keySession = session
+
+                player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
             } else {
-                vc.player = AVPlayer(url: url)
+                DebugProbe.log("No FairPlay block on mint response — playing as clear HLS")
+                player = AVPlayer(url: url)
             }
-            vc.player?.play()
+
+            await MainActor.run {
+                state = .ready(player)
+                player.play()
+                DebugProbe.log("AVPlayer.play() called")
+            }
         } catch {
+            DebugProbe.log("PlayerView.load() failed: \(error.localizedDescription)")
             await reportError(code: "mint-failure",
                               category: "playback",
                               message: error.localizedDescription,
                               severity: "critical")
+            await MainActor.run {
+                state = .error(error.localizedDescription)
+            }
         }
     }
 
@@ -87,8 +131,21 @@ struct PlayerView: UIViewControllerRepresentable {
     }
 }
 
-private final class AssocKeyToken {}
-private enum AssocKeys {
-    static let keySession = Unmanaged.passUnretained(AssocKeyToken()).toOpaque()
-    static let delegate   = Unmanaged.passUnretained(AssocKeyToken()).toOpaque()
+private struct PlayerHost: UIViewControllerRepresentable {
+    let player: AVPlayer
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let vc = AVPlayerViewController()
+        vc.player = player
+        vc.allowsPictureInPicturePlayback = true
+        vc.showsPlaybackControls = true
+        vc.modalPresentationStyle = .fullScreen
+        return vc
+    }
+
+    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
+        if vc.player !== player {
+            vc.player = player
+        }
+    }
 }

@@ -32,6 +32,9 @@ final class FairPlayKeyDelegate: NSObject, AVContentKeySessionDelegate {
     }
 
     private func handle(keyRequest: AVContentKeyRequest) {
+        let rawIdentifier = (keyRequest.identifier as? String) ?? "<nil>"
+        DebugProbe.log("FairPlay key request, identifier=\(rawIdentifier)")
+
         // The HLS manifest emits identifiers like `skd://<kid>`. FairPlay
         // expects just the part after `skd://` as the content identifier.
         guard
@@ -39,6 +42,7 @@ final class FairPlayKeyDelegate: NSObject, AVContentKeySessionDelegate {
             let kidRange = identifier.range(of: "skd://"),
             let contentIdData = String(identifier[kidRange.upperBound...]).data(using: .utf8)
         else {
+            DebugProbe.log("FairPlay key request had unexpected identifier shape")
             let err = APIError.invalidURL
             keyRequest.processContentKeyResponseError(err)
             onError?(err)
@@ -48,11 +52,13 @@ final class FairPlayKeyDelegate: NSObject, AVContentKeySessionDelegate {
         Task {
             do {
                 let certData = try await fetchCertificate()
+                DebugProbe.log("FairPlay cert fetched, bytes=\(certData.count)")
                 let spcData = try await keyRequest.makeStreamingContentKeyRequestData(
                     forApp: certData,
                     contentIdentifier: contentIdData,
                     options: nil
                 )
+                DebugProbe.log("FairPlay SPC built, bytes=\(spcData.count) — POSTing to license server")
 
                 var req = URLRequest(url: licenseURL)
                 req.httpMethod = "POST"
@@ -63,12 +69,16 @@ final class FairPlayKeyDelegate: NSObject, AVContentKeySessionDelegate {
                 let status = (response as? HTTPURLResponse)?.statusCode ?? -1
                 DebugProbe.log("FairPlay license HTTP \(status) bytes=\(ckcData.count)")
                 guard (200..<300).contains(status) else {
+                    let body = String(data: ckcData, encoding: .utf8) ?? "<binary>"
+                    DebugProbe.log("FairPlay license error body: \(body.prefix(200))")
                     throw APIError.http(status)
                 }
 
                 let keyResponse = AVContentKeyResponse(fairPlayStreamingKeyResponseData: ckcData)
                 keyRequest.processContentKeyResponse(keyResponse)
+                DebugProbe.log("FairPlay CKC delivered to AVFoundation")
             } catch {
+                DebugProbe.log("FairPlay handshake failed: \(error.localizedDescription)")
                 keyRequest.processContentKeyResponseError(error)
                 onError?(error)
             }
