@@ -95,9 +95,16 @@ extension OTNetAPI {
         return try await get("/catalog/epg", query: q)
     }
 
-    func drmSession(contentId: String, mediaIndex: Int = 0) async throws -> DrmSessionResponse {
-        struct Req: Encodable { let contentId: String; let mediaIndex: Int }
-        return try await post("/session", body: Req(contentId: contentId, mediaIndex: mediaIndex))
+    /// Mint a playback session. Returns the HLS master URL conditioned for
+    /// this device, plus a session JWT for the license endpoint. Use this
+    /// instead of `variant.entrypoint` from the catalog — that's the raw
+    /// upstream (often DASH `.mpd`) and AVPlayer cannot consume it.
+    func mintPlayback(contentId: String, protocolName: String = "hls") async throws -> MintResponse {
+        struct Req: Encodable {
+            let contentId: String
+            let `protocol`: String
+        }
+        return try await post("/playback/vod/mint", body: Req(contentId: contentId, protocol: protocolName))
     }
 
     func reportPlayerError(_ report: PlayerErrorReport) async {
@@ -119,6 +126,26 @@ struct CategoryPage: Decodable {
     let total: Int?
     let page: Int?
     let totalPages: Int?
+}
+
+struct MintResponse: Decodable {
+    let playback: Playback
+
+    struct Playback: Decodable {
+        let masterUrl: String
+        let sessionToken: String
+        let drm: MintDrm?
+    }
+
+    struct MintDrm: Decodable {
+        let sessionDrm: Bool?
+        let provider: String?
+        let fairplay: MintFairplay?
+    }
+
+    struct MintFairplay: Decodable {
+        let certificateUrl: String
+    }
 }
 
 struct PlayerErrorReport: Encodable {

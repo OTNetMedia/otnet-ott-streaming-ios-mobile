@@ -6,6 +6,8 @@ final class FairPlayKeyDelegate: NSObject, AVContentKeySessionDelegate {
     let certificateURL: URL
     let onError: ((Error) -> Void)?
 
+    private var cachedCertificate: Data?
+
     init(licenseURL: URL, certificateURL: URL, onError: ((Error) -> Void)? = nil) {
         self.licenseURL = licenseURL
         self.certificateURL = certificateURL
@@ -22,19 +24,33 @@ final class FairPlayKeyDelegate: NSObject, AVContentKeySessionDelegate {
         handle(keyRequest: keyRequest)
     }
 
+    func contentKeySession(_ session: AVContentKeySession,
+                           contentKeyRequest keyRequest: AVContentKeyRequest,
+                           didFailWithError err: Error) {
+        DebugProbe.log("FairPlay key request failed: \(err.localizedDescription)")
+        onError?(err)
+    }
+
     private func handle(keyRequest: AVContentKeyRequest) {
-        let licenseURL = self.licenseURL
-        let certificateURL = self.certificateURL
-        let onError = self.onError
+        // The HLS manifest emits identifiers like `skd://<kid>`. FairPlay
+        // expects just the part after `skd://` as the content identifier.
+        guard
+            let identifier = keyRequest.identifier as? String,
+            let kidRange = identifier.range(of: "skd://"),
+            let contentIdData = String(identifier[kidRange.upperBound...]).data(using: .utf8)
+        else {
+            let err = APIError.invalidURL
+            keyRequest.processContentKeyResponseError(err)
+            onError?(err)
+            return
+        }
 
         Task {
             do {
-                let (certData, _) = try await URLSession.shared.data(from: certificateURL)
-                let contentId = (keyRequest.identifier as? String) ?? ""
-                let assetIdData = Data(contentId.utf8)
+                let certData = try await fetchCertificate()
                 let spcData = try await keyRequest.makeStreamingContentKeyRequestData(
                     forApp: certData,
-                    contentIdentifier: assetIdData,
+                    contentIdentifier: contentIdData,
                     options: nil
                 )
 
@@ -58,19 +74,13 @@ final class FairPlayKeyDelegate: NSObject, AVContentKeySessionDelegate {
             }
         }
     }
-}
 
-func resolveFairPlayUrls(variant: MediaVariant,
-                         contentId: String,
-                         mediaIndex: Int) async throws -> (license: URL, cert: URL) {
-    guard let fairplay = variant.drm?.fairplay,
-          let certStr = fairplay.certificateUrl,
-          let cert = URL(string: certStr) else {
-        throw APIError.invalidURL
+    private func fetchCertificate() async throws -> Data {
+        if let cached = cachedCertificate { return cached }
+        let (data, response) = try await URLSession.shared.data(from: certificateURL)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+        guard (200..<300).contains(status) else { throw APIError.http(status) }
+        cachedCertificate = data
+        return data
     }
-    let session = try await OTNetAPI.shared.drmSession(contentId: contentId, mediaIndex: mediaIndex)
-    guard let license = URL(string: "https://otnet.io/api/v1/playback/drm/license?token=\(session.token)&system=fairplay") else {
-        throw APIError.invalidURL
-    }
-    return (license, cert)
 }

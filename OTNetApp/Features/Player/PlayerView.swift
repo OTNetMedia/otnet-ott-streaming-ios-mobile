@@ -21,27 +21,30 @@ struct PlayerView: UIViewControllerRepresentable {
 
     @MainActor
     private func configure(_ vc: AVPlayerViewController) async {
-        let variants = content.media?.first?.variants ?? []
-        let chosen = variants.first(where: { $0.protocolName == "hls" }) ?? variants.first
-        guard let variant = chosen,
-              let entry = variant.entrypoint,
-              let url = URL(string: entry) else {
-            await reportError(code: "no-variant",
-                              category: "playback",
-                              message: "No playable variant found.",
-                              severity: "high")
-            return
-        }
+        do {
+            let mint = try await OTNetAPI.shared.mintPlayback(contentId: content.id, protocolName: "hls")
 
-        if variant.drm?.fairplay != nil {
-            do {
-                let (license, cert) = try await resolveFairPlayUrls(
-                    variant: variant, contentId: content.id, mediaIndex: 0
-                )
+            guard let url = URL(string: mint.playback.masterUrl) else {
+                throw APIError.invalidURL
+            }
+
+            if let fairplay = mint.playback.drm?.fairplay,
+               let certURL = URL(string: fairplay.certificateUrl) {
+                guard var components = URLComponents(string: "https://otnet.io/api/v1/playback/drm/license") else {
+                    throw APIError.invalidURL
+                }
+                components.queryItems = [
+                    URLQueryItem(name: "token",  value: mint.playback.sessionToken),
+                    URLQueryItem(name: "system", value: "fairplay"),
+                ]
+                guard let licenseURL = components.url else {
+                    throw APIError.invalidURL
+                }
+
                 let keySession = AVContentKeySession(keySystem: .fairPlayStreaming)
                 let delegate = FairPlayKeyDelegate(
-                    licenseURL: license,
-                    certificateURL: cert,
+                    licenseURL: licenseURL,
+                    certificateURL: certURL,
                     onError: { err in
                         Task {
                             await reportError(code: "drm-license-failure",
@@ -52,22 +55,22 @@ struct PlayerView: UIViewControllerRepresentable {
                     }
                 )
                 keySession.setDelegate(delegate, queue: .main)
+
                 let asset = AVURLAsset(url: url)
                 keySession.addContentKeyRecipient(asset)
                 vc.player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
                 objc_setAssociatedObject(vc, AssocKeys.keySession, keySession, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
                 objc_setAssociatedObject(vc, AssocKeys.delegate,  delegate,   .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-            } catch {
-                await reportError(code: "drm-session-failure",
-                                  category: "drm",
-                                  message: error.localizedDescription,
-                                  severity: "critical")
-                return
+            } else {
+                vc.player = AVPlayer(url: url)
             }
-        } else {
-            vc.player = AVPlayer(url: url)
+            vc.player?.play()
+        } catch {
+            await reportError(code: "mint-failure",
+                              category: "playback",
+                              message: error.localizedDescription,
+                              severity: "critical")
         }
-        vc.player?.play()
     }
 
     private func reportError(code: String, category: String, message: String, severity: String) async {
