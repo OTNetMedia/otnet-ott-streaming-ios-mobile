@@ -17,6 +17,7 @@ struct ContentDetailView: View {
                     Text(synopsis)
                         .font(.body)
                         .foregroundStyle(OTNetTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 20)
                 }
 
@@ -25,6 +26,7 @@ struct ContentDetailView: View {
                         .padding(.top, 12)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.bottom, 60)
         }
         .background(OTNetTheme.background.ignoresSafeArea())
@@ -41,17 +43,18 @@ struct ContentDetailView: View {
 
     private var heroSection: some View {
         let displayed = vm.detail ?? content
-        return ZStack(alignment: .bottom) {
-            AsyncImage(url: displayed.landscapeURL ?? displayed.posterURL) { phase in
-                switch phase {
-                case .success(let img):
-                    img.resizable().aspectRatio(contentMode: .fill)
-                default:
-                    Rectangle().fill(OTNetTheme.card)
-                }
+        return AsyncImage(url: displayed.landscapeURL ?? displayed.posterURL) { phase in
+            switch phase {
+            case .success(let img):
+                img.resizable().scaledToFill()
+            default:
+                Rectangle().fill(OTNetTheme.card)
             }
-            .frame(height: 280)
-            .clipped()
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 280)
+        .clipped()
+        .overlay(alignment: .bottom) {
             LinearGradient(
                 colors: [.clear, OTNetTheme.background],
                 startPoint: .top, endPoint: .bottom
@@ -66,7 +69,7 @@ struct ContentDetailView: View {
             if let url = displayed.titleImageURL {
                 AsyncImage(url: url) { phase in
                     if case .success(let img) = phase {
-                        img.resizable().aspectRatio(contentMode: .fit)
+                        img.resizable().scaledToFit()
                     } else {
                         Text(displayed.displayTitle)
                             .font(.largeTitle).bold()
@@ -78,8 +81,10 @@ struct ContentDetailView: View {
                 Text(displayed.displayTitle)
                     .font(.largeTitle).bold()
                     .foregroundStyle(OTNetTheme.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
     }
 
