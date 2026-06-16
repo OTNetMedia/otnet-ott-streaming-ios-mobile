@@ -47,7 +47,7 @@ private struct HeroSlide: View {
                 .clipped()
 
                 LinearGradient(
-                    colors: [.clear, OTNetTheme.background.opacity(0.6), OTNetTheme.background],
+                    colors: [.black.opacity(0.45), .clear, OTNetTheme.background.opacity(0.6), OTNetTheme.background],
                     startPoint: .top, endPoint: .bottom
                 )
                 .frame(width: geo.size.width, height: geo.size.height)

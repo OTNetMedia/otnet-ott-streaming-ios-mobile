@@ -87,12 +87,33 @@ extension OTNetAPI {
         return try await get("/catalog/content/category/\(categoryId)", query: q)
     }
 
+    func person(id: String) async throws -> PersonProfile {
+        try await get("/catalog/people/\(id)")
+    }
+
+    func contentForPerson(_ personId: String, page: Int = 1, limit: Int = 30) async throws -> CategoryPage {
+        let q = [
+            URLQueryItem(name: "personId", value: personId),
+            URLQueryItem(name: "page",     value: String(page)),
+            URLQueryItem(name: "limit",    value: String(limit)),
+        ]
+        return try await get("/catalog/content", query: q)
+    }
+
     func epg(channelId: String? = nil, back: Int? = nil, ahead: Int? = nil) async throws -> EPGResponse {
         var q: [URLQueryItem] = []
         if let channelId { q.append(URLQueryItem(name: "channelId", value: channelId)) }
         if let back      { q.append(URLQueryItem(name: "back",      value: String(back))) }
         if let ahead     { q.append(URLQueryItem(name: "ahead",     value: String(ahead))) }
         return try await get("/catalog/epg", query: q)
+    }
+
+    func channels() async throws -> ChannelsResponse {
+        try await get("/catalog/channels")
+    }
+
+    func settings() async throws -> PublisherSettings {
+        try await get("/catalog/settings")
     }
 
     /// Mint a playback session. Returns the HLS master URL conditioned for
@@ -105,6 +126,11 @@ extension OTNetAPI {
             let `protocol`: String
         }
         return try await post("/playback/vod/mint", body: Req(contentId: contentId, protocol: protocolName))
+    }
+
+    func mintLive(channelId: String, protocolName: String = "hls") async throws -> MintResponse {
+        struct Req: Encodable { let `protocol`: String }
+        return try await post("/playback/live/\(channelId)/mint", body: Req(protocol: protocolName))
     }
 
     func reportPlayerError(_ report: PlayerErrorReport) async {
@@ -133,18 +159,58 @@ struct MintResponse: Decodable {
 
     struct Playback: Decodable {
         let masterUrl: String
-        let sessionToken: String
+        let sessionToken: String?
         let drm: MintDrm?
+        let resources: PlaybackResources?
+        let adbreaks: AdBreaks?
+
+        var effectiveToken: String? { sessionToken ?? drm?.token }
     }
 
     struct MintDrm: Decodable {
         let sessionDrm: Bool?
         let provider: String?
         let fairplay: MintFairplay?
+        let token: String?
     }
 
     struct MintFairplay: Decodable {
         let certificateUrl: String
+    }
+}
+
+struct PlaybackResources: Decodable {
+    let poster: String?
+    let bif: String?
+    let waveform: String?
+    let metadata: String?
+
+    var bifURL: URL? { bif.flatMap(URL.init(string:)) }
+}
+
+struct AdBreaks: Decodable {
+    let totalDuration: Double?
+    let blockSkipping: Bool?
+    let breaks: [AdBreak]?
+}
+
+struct AdBreak: Decodable, Hashable, Identifiable {
+    var id: String { (trackingId ?? "") + "-" + String(startTime ?? 0) }
+    let startTime: Double?
+    let duration: Double?
+    let type: String?
+    let name: String?
+    let advertiser: String?
+    let adTitle: String?
+    let adDescription: String?
+    let clickUrl: String?
+    let ctaText: String?
+    let skippable: Bool?
+    let trackingId: String?
+
+    var endTime: Double? {
+        guard let s = startTime, let d = duration else { return nil }
+        return s + d
     }
 }
 

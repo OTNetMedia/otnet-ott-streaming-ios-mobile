@@ -125,7 +125,10 @@ struct CastAndCrewView: View {
 
             LazyVGrid(columns: columns, alignment: .leading, spacing: 18) {
                 ForEach(members, id: \.id) { person in
-                    PersonCard(person: person)
+                    NavigationLink(value: person) {
+                        PersonCard(person: person)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 20)

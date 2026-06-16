@@ -7,11 +7,14 @@ struct ContentDetailView: View {
 
     private var displayed: Content { vm.detail ?? content }
 
+    @Environment(\.dismiss) private var dismiss
+
     var body: some View {
         GeometryReader { geo in
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     heroSection(width: geo.size.width)
+                        .ignoresSafeArea(edges: .top)
                     titleSection
                     ContentMetaStrip(item: displayed, includeContentType: true)
                         .padding(.horizontal, 20)
@@ -49,9 +52,20 @@ struct ContentDetailView: View {
             }
         }
         .background(OTNetTheme.background.ignoresSafeArea())
-        .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar(.hidden, for: .navigationBar)
+        .overlay(alignment: .topLeading) {
+            Button { dismiss() } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(.black.opacity(0.55), in: Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.15), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.4), radius: 6, y: 2)
+            }
+            .padding(.leading, 16)
+            .padding(.top, 8)
+        }
         .fullScreenCover(isPresented: $showingPlayer) {
             PlayerView(content: displayed)
                 .ignoresSafeArea()
@@ -60,30 +74,41 @@ struct ContentDetailView: View {
         .navigationDestination(for: CastAndCrewRoute.self) { _ in
             CastAndCrewView(content: displayed)
         }
+        .navigationDestination(for: Personnel.self) { person in
+            PersonDetailView(personnel: person)
+        }
         .task { await vm.load(content.id) }
     }
 
     private func heroSection(width: CGFloat) -> some View {
-        AsyncImage(url: displayed.landscapeURL ?? displayed.posterURL) { phase in
+        let height: CGFloat = 360
+        return AsyncImage(url: displayed.landscapeURL ?? displayed.posterURL) { phase in
             switch phase {
             case .success(let img):
                 img.resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: width, height: 280, alignment: .top)
+                    .frame(width: width, height: height, alignment: .top)
                     .clipped()
             default:
                 Rectangle().fill(OTNetTheme.card)
-                    .frame(width: width, height: 280)
+                    .frame(width: width, height: height)
             }
         }
-        .frame(width: width, height: 280)
+        .frame(width: width, height: height)
         .clipped()
+        .overlay(alignment: .top) {
+            LinearGradient(
+                colors: [.black.opacity(0.55), .clear],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: 90)
+        }
         .overlay(alignment: .bottom) {
             LinearGradient(
                 colors: [.clear, OTNetTheme.background],
                 startPoint: .top, endPoint: .bottom
             )
-            .frame(height: 120)
+            .frame(height: 160)
         }
     }
 
@@ -159,34 +184,10 @@ struct ContentDetailView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 14) {
                     ForEach(castMembers, id: \.id) { member in
-                        VStack(spacing: 6) {
-                            AsyncImage(url: member.headshotURL) { phase in
-                                switch phase {
-                                case .success(let img):
-                                    img.resizable().scaledToFill()
-                                default:
-                                    Circle().fill(OTNetTheme.card)
-                                        .overlay(
-                                            Image(systemName: "person.fill")
-                                                .foregroundStyle(OTNetTheme.textSecondary)
-                                        )
-                                }
-                            }
-                            .frame(width: 64, height: 64)
-                            .clipShape(Circle())
-
-                            Text(member.displayName ?? "")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(OTNetTheme.textPrimary)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.center)
-                            if let role = member.role {
-                                Text(role)
-                                    .font(.caption2)
-                                    .foregroundStyle(OTNetTheme.textSecondary)
-                            }
+                        NavigationLink(value: member) {
+                            CastRowCard(member: member)
                         }
-                        .frame(width: 80)
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, 20)
@@ -272,6 +273,45 @@ struct ContentDetailView: View {
 
 struct CastAndCrewRoute: Hashable {
     let contentId: String
+}
+
+private struct CastRowCard: View {
+    let member: Personnel
+
+    var body: some View {
+        VStack(spacing: 6) {
+            AsyncImage(url: member.headshotURL) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 64, height: 64, alignment: .top)
+                        .clipped()
+                default:
+                    ZStack {
+                        Circle().fill(OTNetTheme.card)
+                        Image(systemName: "person.fill")
+                            .foregroundStyle(OTNetTheme.textSecondary)
+                    }
+                    .frame(width: 64, height: 64)
+                }
+            }
+            .frame(width: 64, height: 64)
+            .clipShape(Circle())
+
+            Text(member.displayName ?? "")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(OTNetTheme.textPrimary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+            if let role = member.role {
+                Text(role)
+                    .font(.caption2)
+                    .foregroundStyle(OTNetTheme.textSecondary)
+            }
+        }
+        .frame(width: 80)
+    }
 }
 
 private struct FlowHStack: View {

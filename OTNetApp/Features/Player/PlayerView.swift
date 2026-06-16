@@ -3,15 +3,19 @@ import SwiftUI
 import UIKit
 
 struct PlayerView: View {
+    enum Mode { case vod, live }
     let content: Content
+    var mode: Mode = .vod
 
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var settingsStore: SettingsStore
     @State private var state: PlayerState = .loading
     @State private var keyDelegate: FairPlayKeyDelegate?
     @State private var keySession: AVContentKeySession?
 
     enum PlayerState {
         case loading
-        case ready(AVPlayer)
+        case ready(AVPlayer, MintResponse.Playback)
         case error(String)
     }
 
@@ -21,15 +25,25 @@ struct PlayerView: View {
             switch state {
             case .loading:
                 VStack(spacing: 12) {
-                    ProgressView().tint(.white)
+                    ProgressView().tint(.white).scaleEffect(1.3)
                     Text("Preparing playback…")
                         .foregroundStyle(.white.opacity(0.7))
                         .font(.footnote)
                 }
-            case .ready(let player):
-                PlayerHost(player: player).ignoresSafeArea()
+            case .ready(let player, let playback):
+                CustomPlayerSurface(
+                    player: player,
+                    title: content.displayTitle,
+                    subtitle: mode == .live ? "Live" : content.primaryGenreName,
+                    isLive: mode == .live,
+                    bifURL: playback.resources?.bifURL,
+                    adBreaks: playback.adbreaks?.breaks ?? [],
+                    blockAdSkipping: (playback.adbreaks?.blockSkipping ?? false)
+                        || (settingsStore.settings?.blockAdSkipping ?? false),
+                    onDismiss: { dismiss() }
+                )
             case .error(let message):
-                VStack(spacing: 12) {
+                VStack(spacing: 16) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.largeTitle)
                         .foregroundStyle(.orange)
@@ -37,6 +51,12 @@ struct PlayerView: View {
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
+                    Button("Close") { dismiss() }
+                        .font(.headline)
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 10)
+                        .background(.white, in: Capsule())
                 }
             }
         }
@@ -49,7 +69,13 @@ struct PlayerView: View {
             try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [])
             try? AVAudioSession.sharedInstance().setActive(true)
 
-            let mint = try await OTNetAPI.shared.mintPlayback(contentId: content.id, protocolName: "hls")
+            let mint: MintResponse
+            switch mode {
+            case .vod:
+                mint = try await OTNetAPI.shared.mintPlayback(contentId: content.id, protocolName: "hls")
+            case .live:
+                mint = try await OTNetAPI.shared.mintLive(channelId: content.id, protocolName: "hls")
+            }
             guard let url = URL(string: mint.playback.masterUrl) else {
                 throw APIError.invalidURL
             }
@@ -61,8 +87,11 @@ struct PlayerView: View {
                 guard var components = URLComponents(string: "https://otnet.io/api/v1/playback/drm/license") else {
                     throw APIError.invalidURL
                 }
+                guard let token = mint.playback.effectiveToken else {
+                    throw APIError.invalidURL
+                }
                 components.queryItems = [
-                    URLQueryItem(name: "token",  value: mint.playback.sessionToken),
+                    URLQueryItem(name: "token",  value: token),
                     URLQueryItem(name: "system", value: "fairplay"),
                 ]
                 guard let licenseURL = components.url else {
@@ -101,7 +130,7 @@ struct PlayerView: View {
             }
 
             await MainActor.run {
-                state = .ready(player)
+                state = .ready(player, mint.playback)
                 player.play()
                 DebugProbe.log("AVPlayer.play() called")
             }
@@ -131,21 +160,3 @@ struct PlayerView: View {
     }
 }
 
-private struct PlayerHost: UIViewControllerRepresentable {
-    let player: AVPlayer
-
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let vc = AVPlayerViewController()
-        vc.player = player
-        vc.allowsPictureInPicturePlayback = true
-        vc.showsPlaybackControls = true
-        vc.modalPresentationStyle = .fullScreen
-        return vc
-    }
-
-    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
-        if vc.player !== player {
-            vc.player = player
-        }
-    }
-}

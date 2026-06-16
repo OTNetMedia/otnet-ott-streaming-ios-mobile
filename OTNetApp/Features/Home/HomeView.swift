@@ -23,6 +23,7 @@ struct HomeView: View {
                 case .loaded(let homepage):
                     if let hero = homepage.hero, !hero.isEmpty {
                         HeroBanner(items: hero)
+                            .ignoresSafeArea(edges: .top)
                     }
                     ForEach(homepage.rows ?? []) { row in
                         ContentRow(row: row)
@@ -32,10 +33,9 @@ struct HomeView: View {
             .padding(.bottom, 40)
         }
         .background(OTNetTheme.background.ignoresSafeArea())
-        .navigationTitle("Home")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(for: Content.self) { ContentDetailView(content: $0) }
+        .navigationDestination(for: Genre.self) { CategoryDetailView(category: $0) }
         .task { await vm.load() }
         .refreshable { await vm.load() }
     }

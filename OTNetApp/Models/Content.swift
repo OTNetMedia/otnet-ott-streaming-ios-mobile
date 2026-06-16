@@ -75,9 +75,24 @@ extension Content: Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
-struct ContentParentRef: Codable {
+struct ContentParentRef: Codable, Hashable {
     let id: String?
+
     enum CodingKeys: String, CodingKey { case id = "_id" }
+
+    init(from decoder: Decoder) throws {
+        if let single = try? decoder.singleValueContainer().decode(String.self) {
+            self.id = single
+            return
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decodeIfPresent(String.self, forKey: .id)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(id, forKey: .id)
+    }
 }
 
 struct GroupRef: Codable, Hashable {
@@ -101,6 +116,21 @@ struct Personnel: Codable, Hashable, Identifiable {
     var headshotURL: URL? { person?.headshot.flatMap(URL.init(string:)) }
 
     enum CodingKeys: String, CodingKey { case id = "_id", role, person }
+}
+
+struct PersonProfile: Codable, Hashable {
+    let id: String?
+    let name: String?
+    let title: String?
+    let headshot: String?
+    let team: GroupRef?
+    let organization: GroupRef?
+
+    enum CodingKeys: String, CodingKey {
+        case id = "_id", name, title, headshot, team, organization
+    }
+
+    var headshotURL: URL? { headshot.flatMap(URL.init(string:)) }
 }
 
 struct PersonRef: Codable, Hashable {
