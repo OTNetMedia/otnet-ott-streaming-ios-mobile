@@ -610,6 +610,9 @@ final class PlayerController: ObservableObject {
     func tearDown() {
         if let t = timeObserver { player.removeTimeObserver(t); timeObserver = nil }
         statusObservation?.invalidate(); statusObservation = nil
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
     func togglePlay() {

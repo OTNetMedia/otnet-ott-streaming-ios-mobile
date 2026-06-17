@@ -9,6 +9,12 @@ struct Content: Codable, Identifiable {
     let media: [MediaItem]?
     let ageRating: String?
     let titleImage: String?
+    /// Top-level portrait artwork (preferred over media[0].portrait).
+    let portrait: String?
+    /// Top-level landscape artwork (preferred over media[0].landscape).
+    let landscape: String?
+    /// Top-level backdrop artwork (preferred over media[0].backdrop).
+    let backdrop: String?
     let childCount: Int?
     let sortOrder: Int?
     let parent: ContentParentRef?
@@ -24,15 +30,45 @@ struct Content: Codable, Identifiable {
     let personnel: [Personnel]?
     let contentAdvisory: [String]?
     let venue: String?
-    let teaser: String?
+    /// Teaser preview, multi-protocol so iOS / Apple TV grab HLS while
+    /// other clients take whichever they prefer. nil = no teaser set.
+    let teaser: TeaserInfo?
 
     var displayTitle: String { title ?? "Untitled" }
     var firstMedia: MediaItem? { media?.first }
-    var posterURL: URL? { firstMedia?.portrait.flatMap(URL.init(string:)) }
-    var landscapeURL: URL? {
-        (firstMedia?.landscape ?? firstMedia?.backdrop).flatMap(URL.init(string:))
-    }
     var titleImageURL: URL? { titleImage.flatMap(URL.init(string:)) }
+
+    /// Portrait/tile artwork. Prefers the top-level `portrait`, then other
+    /// top-level images, and finally falls back to the first media item.
+    var posterURL: URL? {
+        Content.firstURL(
+            portrait, titleImage, landscape, backdrop,
+            firstMedia?.portrait, firstMedia?.landscape, firstMedia?.backdrop
+        )
+    }
+
+    /// Landscape artwork (banners, hero, content rows).
+    var landscapeURL: URL? {
+        Content.firstURL(
+            landscape, backdrop, titleImage, portrait,
+            firstMedia?.landscape, firstMedia?.backdrop, firstMedia?.portrait
+        )
+    }
+
+    /// Wide backdrop (detail-page hero). Prefers backdrop over landscape.
+    var backdropURL: URL? {
+        Content.firstURL(
+            backdrop, landscape, titleImage, portrait,
+            firstMedia?.backdrop, firstMedia?.landscape, firstMedia?.portrait
+        )
+    }
+
+    private static func firstURL(_ candidates: String?...) -> URL? {
+        for s in candidates {
+            if let s, !s.isEmpty, let url = URL(string: s) { return url }
+        }
+        return nil
+    }
     var effectiveType: String { contentType ?? type ?? "movie" }
     var isSeries: Bool { (effectiveType == "series") || (childCount ?? 0) > 0 }
     var isSeason: Bool { effectiveType == "season" }
@@ -64,21 +100,55 @@ struct Content: Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id = "_id"
         case title, description, contentType, type, media, ageRating, titleImage
+        case portrait, landscape, backdrop
         case childCount, sortOrder, parent, genres
         case entitled, paywall, monetization
         case date, primaryGroup, secondaryGroup, organization, metadata
         case personnel, contentAdvisory, venue, teaser
     }
 
-    /// AVPlayer-compatible teaser URL. We only return a value when the publisher
-    /// has set an HLS (.m3u8) URL — DASH (.mpd) cannot play natively on iOS.
+    /// AVPlayer-compatible teaser URL. Pulls the HLS variant out of the
+    /// structured teaser block — DASH (.mpd) cannot play natively on iOS,
+    /// so we explicitly require a `protocol == "hls"` variant. Returns nil
+    /// when none is set, the .m3u8 surface, the tile renders without an
+    /// inline preview.
     var teaserHLSURL: URL? {
-        guard let s = teaser, !s.isEmpty,
-              let url = URL(string: s) else { return nil }
-        let lower = url.absoluteString.lowercased()
-        guard lower.contains(".m3u8") else { return nil }
+        guard let variants = teaser?.variants,
+              let entry = variants.first(where: { $0.protocolName?.lowercased() == "hls" })?.entrypoint,
+              let url = URL(string: entry) else { return nil }
         return url
     }
+
+    /// Poster image baked into the teaser ingest (encoder's master.jpg
+    /// pulled from the middle of the clip). Useful as a still
+    /// placeholder before the teaser starts streaming.
+    var teaserPosterURL: URL? {
+        guard let s = teaser?.resources?.poster, let url = URL(string: s) else { return nil }
+        return url
+    }
+}
+
+/// Structured teaser block. Variants mirror the media[i] shape so any
+/// future protocol drops in without another model change. Resources +
+/// duration come straight from the encoder's asset-level outputs.
+struct TeaserInfo: Codable, Hashable {
+    let variants: [TeaserVariant]?
+    let duration: Int?
+    let resources: TeaserResources?
+}
+
+struct TeaserVariant: Codable, Hashable {
+    let protocolName: String?
+    let entrypoint: String?
+
+    enum CodingKeys: String, CodingKey {
+        case protocolName = "protocol"
+        case entrypoint
+    }
+}
+
+struct TeaserResources: Codable, Hashable {
+    let poster: String?
 }
 
 extension Content: Hashable {

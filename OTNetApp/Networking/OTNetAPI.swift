@@ -24,11 +24,22 @@ actor OTNetAPI {
         self.viewerToken = token
     }
 
+    func currentViewerToken() -> String? { viewerToken }
+
+    /// When the viewer is signed in, attach the Bearer everywhere except the
+    /// FairPlay license endpoint (auth'd by the DRM session token in the
+    /// query string; sending a Bearer there can cause a 403).
+    private func viewerTokenAllowed(for path: String) -> Bool {
+        let normalized = path.hasPrefix("/") ? path : "/" + path
+        if normalized.contains("/playback/drm/license") { return false }
+        return true
+    }
+
     func get<T: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws -> T {
         let url = try makeURL(path: path, query: query)
         var request = URLRequest(url: url)
         request.setValue(apiKey, forHTTPHeaderField: "X-Api-Key")
-        if let viewerToken {
+        if let viewerToken, viewerTokenAllowed(for: path) {
             request.setValue("Bearer \(viewerToken)", forHTTPHeaderField: "Authorization")
         }
         let (data, response) = try await session.data(for: request)
@@ -45,7 +56,7 @@ actor OTNetAPI {
         req.httpMethod = "POST"
         req.setValue(apiKey, forHTTPHeaderField: "X-Api-Key")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let viewerToken {
+        if let viewerToken, viewerTokenAllowed(for: path) {
             req.setValue("Bearer \(viewerToken)", forHTTPHeaderField: "Authorization")
         }
         req.httpBody = try encoder.encode(body)
@@ -197,6 +208,13 @@ extension OTNetAPI {
                                     body: Req(contentId: contentId, profileIndex: profileIndex))
     }
 
+    // MARK: - Continue watching (telemetry/progress)
+
+    func watchProgress(profileIndex: Int) async throws -> WatchProgressResponse {
+        try await get("/telemetry/progress",
+                      query: [URLQueryItem(name: "profileIndex", value: String(profileIndex))])
+    }
+
     func removeFromList(contentId: String, profileIndex: Int) async throws {
         struct Req: Encodable { let contentId: String; let profileIndex: Int }
         struct Ack: Decodable { let success: Bool? }
@@ -212,7 +230,7 @@ extension OTNetAPI {
         req.httpMethod = method
         req.setValue(apiKey, forHTTPHeaderField: "X-Api-Key")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let viewerToken {
+        if let viewerToken, viewerTokenAllowed(for: path) {
             req.setValue("Bearer \(viewerToken)", forHTTPHeaderField: "Authorization")
         }
         req.httpBody = try encoder.encode(body)

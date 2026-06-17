@@ -34,6 +34,7 @@ struct LiveTVView: View {
                 contentType: "live",
                 type: "live",
                 media: nil, ageRating: nil, titleImage: nil,
+                portrait: nil, landscape: nil, backdrop: nil,
                 childCount: nil, sortOrder: nil, parent: nil, genres: nil,
                 entitled: true, paywall: nil, monetization: nil,
                 date: nil, primaryGroup: nil, secondaryGroup: nil,

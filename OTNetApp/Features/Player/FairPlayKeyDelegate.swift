@@ -66,12 +66,22 @@ final class FairPlayKeyDelegate: NSObject, AVContentKeySessionDelegate {
                 req.httpBody = spcData
 
                 let (ckcData, response) = try await URLSession.shared.data(for: req)
-                let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+                let httpResponse = response as? HTTPURLResponse
+                let status = httpResponse?.statusCode ?? -1
                 DebugProbe.log("FairPlay license HTTP \(status) bytes=\(ckcData.count)")
                 guard (200..<300).contains(status) else {
                     let body = String(data: ckcData, encoding: .utf8) ?? "<binary>"
-                    DebugProbe.log("FairPlay license error body: \(body.prefix(200))")
-                    throw APIError.http(status)
+                    DebugProbe.log("FairPlay license error body: '\(body)'")
+                    DebugProbe.log("FairPlay license error headers: \(httpResponse?.allHeaderFields ?? [:])")
+                    DebugProbe.log("FairPlay license error url: \(licenseURL.absoluteString)")
+                    let message = body.isEmpty
+                        ? "HTTP \(status) (empty body) — check publisher DRM config"
+                        : "HTTP \(status): \(body.prefix(180))"
+                    throw NSError(
+                        domain: "FairPlayLicense",
+                        code: status,
+                        userInfo: [NSLocalizedDescriptionKey: message]
+                    )
                 }
 
                 let keyResponse = AVContentKeyResponse(fairPlayStreamingKeyResponseData: ckcData)

@@ -87,16 +87,26 @@ struct ContentDetailView: View {
 
     private func heroSection(width: CGFloat) -> some View {
         let height: CGFloat = 360
-        return AsyncImage(url: displayed.landscapeURL ?? displayed.posterURL) { phase in
-            switch phase {
-            case .success(let img):
-                img.resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: width, height: height, alignment: .top)
-                    .clipped()
-            default:
-                Rectangle().fill(OTNetTheme.card)
+        return ZStack {
+            CachedAsyncImage(url: displayed.backdropURL ?? displayed.landscapeURL ?? displayed.posterURL) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: width, height: height, alignment: .top)
+                        .clipped()
+                default:
+                    Rectangle().fill(OTNetTheme.card)
+                        .frame(width: width, height: height)
+                }
+            }
+            .frame(width: width, height: height)
+            .clipped()
+
+            if let teaserURL = displayed.teaserHLSURL {
+                TeaserSurface(url: teaserURL)
                     .frame(width: width, height: height)
+                    .clipped()
             }
         }
         .frame(width: width, height: height)
