@@ -50,6 +50,22 @@ actor OTNetAPI {
         catch { throw APIError.decoding(error) }
     }
 
+    /// Like `get<T>`, but returns the raw bytes (no decoding). Use for
+    /// diagnosing shape mismatches when typed decoding loses fields silently.
+    func rawGet(_ path: String, query: [URLQueryItem] = []) async throws -> Data {
+        let url = try makeURL(path: path, query: query)
+        var request = URLRequest(url: url)
+        request.setValue(apiKey, forHTTPHeaderField: "X-Api-Key")
+        if let viewerToken, viewerTokenAllowed(for: path) {
+            request.setValue("Bearer \(viewerToken)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await session.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+        DebugProbe.log(url, status: status, bytes: data.count, decoded: "raw")
+        guard (200..<300).contains(status) else { throw APIError.http(status) }
+        return data
+    }
+
     func post<Body: Encodable, T: Decodable>(_ path: String, body: Body) async throws -> T {
         let url = try makeURL(path: path)
         var req = URLRequest(url: url)
@@ -213,6 +229,40 @@ extension OTNetAPI {
     func watchProgress(profileIndex: Int) async throws -> WatchProgressResponse {
         try await get("/telemetry/progress",
                       query: [URLQueryItem(name: "profileIndex", value: String(profileIndex))])
+    }
+
+    /// Authenticated watch-progress write. Goes through the standard auth path
+    /// (X-Api-Key + viewer Bearer) and passes `contentId|channelId` in the body
+    /// so the server can route to `WatchProgress` even when the playback JWT
+    /// would otherwise route the row anonymously.
+    func postWatchProgress(
+        contentId: String?,
+        channelId: String?,
+        profileIndex: Int,
+        progressSeconds: Int,
+        durationSeconds: Int,
+        deviceId: String
+    ) async throws {
+        struct Req: Encodable {
+            let contentId: String?
+            let channelId: String?
+            let profileIndex: Int
+            let progressSeconds: Int
+            let durationSeconds: Int
+            let deviceId: String
+        }
+        struct Ack: Decodable { let success: Bool? }
+        let _: Ack = try await post(
+            "/telemetry/progress",
+            body: Req(
+                contentId: contentId,
+                channelId: channelId,
+                profileIndex: profileIndex,
+                progressSeconds: progressSeconds,
+                durationSeconds: durationSeconds,
+                deviceId: deviceId
+            )
+        )
     }
 
     func removeFromList(contentId: String, profileIndex: Int) async throws {

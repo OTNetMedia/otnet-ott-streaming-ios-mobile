@@ -14,7 +14,7 @@ struct WatchProgress: Decodable, Identifiable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case _id, contentId
-        case position, positionSec, positionSeconds
+        case position, positionSec, positionSeconds, progressSeconds
         case duration, durationSec, durationSeconds
         case completed, updatedAt, profileIndex
         case content
@@ -23,18 +23,20 @@ struct WatchProgress: Decodable, Identifiable, Hashable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
 
-        // ID — fall back to (contentId + updatedAt) when there's no _id.
-        let cid = try c.decodeIfPresent(String.self, forKey: .contentId)
-        let updated = try c.decodeIfPresent(String.self, forKey: .updatedAt)
+        // The /telemetry/progress endpoint flattens the Content payload into
+        // each item — `_id` IS the content's `_id`, not a separate progress id.
         let underscoreId = try c.decodeIfPresent(String.self, forKey: ._id)
-        self.id = underscoreId ?? "\(cid ?? "no-id")-\(updated ?? UUID().uuidString)"
+        let cidExplicit = try c.decodeIfPresent(String.self, forKey: .contentId)
+        let updated = try c.decodeIfPresent(String.self, forKey: .updatedAt)
 
+        let cid = cidExplicit ?? underscoreId
         self.contentId = cid
+        self.id = underscoreId ?? "\(cid ?? "no-id")-\(updated ?? UUID().uuidString)"
 
         // Position / duration accept multiple key forms; default to 0.
         self.position = WatchProgress.firstDouble(
             container: c,
-            keys: [.position, .positionSec, .positionSeconds]
+            keys: [.position, .positionSec, .positionSeconds, .progressSeconds]
         )
         self.duration = WatchProgress.firstDouble(
             container: c,
@@ -44,7 +46,15 @@ struct WatchProgress: Decodable, Identifiable, Hashable {
         self.completed = try c.decodeIfPresent(Bool.self, forKey: .completed)
         self.updatedAt = updated
         self.profileIndex = try c.decodeIfPresent(Int.self, forKey: .profileIndex)
-        self.content = try c.decodeIfPresent(Content.self, forKey: .content)
+
+        // Prefer an explicit `content` object if the server sends one; otherwise
+        // decode the same root container as a Content (the item is a flattened
+        // Content with `progressSeconds`/`durationSeconds`/`mediaIndex` added).
+        if let embedded = try c.decodeIfPresent(Content.self, forKey: .content) {
+            self.content = embedded
+        } else {
+            self.content = try? Content(from: decoder)
+        }
     }
 
     var fractionComplete: Double {

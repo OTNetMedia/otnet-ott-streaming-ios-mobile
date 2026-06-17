@@ -135,6 +135,35 @@ struct TeaserInfo: Codable, Hashable {
     let variants: [TeaserVariant]?
     let duration: Int?
     let resources: TeaserResources?
+
+    enum CodingKeys: String, CodingKey { case variants, duration, resources }
+
+    init(variants: [TeaserVariant]? = nil, duration: Int? = nil, resources: TeaserResources? = nil) {
+        self.variants = variants
+        self.duration = duration
+        self.resources = resources
+    }
+
+    init(from decoder: Decoder) throws {
+        // Legacy content rows in /viewer/list still come back with `teaser: ""`
+        // (a string) instead of the structured object. Treat any non-object
+        // shape as "no teaser configured" so a single legacy row can't blow up
+        // decoding of the whole response.
+        if let single = try? decoder.singleValueContainer(),
+           (try? single.decode(String.self)) != nil
+            || (try? single.decode(Int.self)) != nil
+            || (try? single.decode(Double.self)) != nil
+            || (try? single.decode(Bool.self)) != nil {
+            self.variants = nil
+            self.duration = nil
+            self.resources = nil
+            return
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.variants  = try c.decodeIfPresent([TeaserVariant].self, forKey: .variants)
+        self.duration  = try c.decodeIfPresent(Int.self,             forKey: .duration)
+        self.resources = try c.decodeIfPresent(TeaserResources.self, forKey: .resources)
+    }
 }
 
 struct TeaserVariant: Codable, Hashable {

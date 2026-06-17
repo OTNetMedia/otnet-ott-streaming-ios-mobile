@@ -10,6 +10,7 @@ struct HomeView: View {
     @State private var isRefreshing = false
     @State private var didTriggerThisDrag = false
     @State private var didHaptic = false
+    @State private var resumeTarget: ResumeTarget?
     private let pullThreshold: CGFloat = 80
 
     var body: some View {
@@ -32,7 +33,10 @@ struct HomeView: View {
                     if !continueWatching.items.isEmpty {
                         ContinueWatchingRow(
                             items: continueWatching.items,
-                            resolve: { continueWatching.content(for: $0) }
+                            resolve: { continueWatching.content(for: $0) },
+                            onResume: { content, startAt in
+                                resumeTarget = ResumeTarget(content: content, startAt: startAt)
+                            }
                         )
                     }
                     ForEach(homepage.rows ?? []) { row in
@@ -80,6 +84,10 @@ struct HomeView: View {
         .navigationDestination(for: Content.self) { ContentDetailView(content: $0) }
         .navigationDestination(for: Genre.self) { CategoryDetailView(category: $0) }
         .navigationDestination(for: SearchRoute.self) { _ in SearchView() }
+        .fullScreenCover(item: $resumeTarget) { target in
+            PlayerView(content: target.content, startAt: target.startAt)
+                .ignoresSafeArea()
+        }
         .task { await refreshAll() }
     }
 
@@ -137,6 +145,14 @@ struct HomeView: View {
         }()
         _ = await (home, cw)
     }
+}
+
+// MARK: - Continue Watching resume target
+
+struct ResumeTarget: Identifiable, Hashable {
+    let content: Content
+    let startAt: Double
+    var id: String { content.id }
 }
 
 // MARK: - UIScrollView offset reader

@@ -3,6 +3,10 @@ import SwiftUI
 struct ContinueWatchingRow: View {
     let items: [WatchProgress]
     let resolve: (WatchProgress) -> Content?
+    /// Fires when a tile is tapped. Receives the resolved Content and the
+    /// position (in seconds) the viewer left off at — the caller should
+    /// present a player seeded with that startAt.
+    var onResume: (Content, Double) -> Void
 
     private var pairs: [(WatchProgress, Content)] {
         items.compactMap { p in
@@ -23,7 +27,9 @@ struct ContinueWatchingRow: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: OTNetTheme.cardGap) {
                         ForEach(pairs, id: \.0.id) { progress, content in
-                            NavigationLink(value: content) {
+                            Button {
+                                onResume(content, progress.position)
+                            } label: {
                                 ContinueWatchingCard(progress: progress, content: content)
                             }
                             .buttonStyle(.plain)

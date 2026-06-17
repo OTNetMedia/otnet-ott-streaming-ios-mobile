@@ -6,12 +6,18 @@ struct PlayerView: View {
     enum Mode { case vod, live }
     let content: Content
     var mode: Mode = .vod
+    /// Seconds into the asset to resume from. Anything ≤ 1 is treated as
+    /// "play from start" — we don't bother queuing a seek for trivial offsets.
+    var startAt: Double? = nil
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var settingsStore: SettingsStore
+    @EnvironmentObject private var auth: AuthStore
+    @EnvironmentObject private var continueWatching: ContinueWatchingStore
     @State private var state: PlayerState = .loading
     @State private var keyDelegate: FairPlayKeyDelegate?
     @State private var keySession: AVContentKeySession?
+    @State private var progressReporter: PlaybackProgressReporter?
 
     enum PlayerState {
         case loading
@@ -61,6 +67,11 @@ struct PlayerView: View {
             }
         }
         .task(id: content.id) { await load() }
+        .onDisappear {
+            progressReporter?.stop()
+            progressReporter = nil
+            Task { await continueWatching.refresh(profileIndex: auth.activeProfileIndex) }
+        }
     }
 
     private func load() async {
@@ -131,8 +142,28 @@ struct PlayerView: View {
 
             await MainActor.run {
                 state = .ready(player, mint.playback)
-                player.play()
-                DebugProbe.log("AVPlayer.play() called")
+
+                if let startAt, startAt > 1 {
+                    let target = CMTime(seconds: startAt, preferredTimescale: 600)
+                    DebugProbe.log("AVPlayer seeking to \(Int(startAt))s before play")
+                    player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .positiveInfinity) { _ in
+                        player.play()
+                        DebugProbe.log("AVPlayer.play() called after seek")
+                    }
+                } else {
+                    player.play()
+                    DebugProbe.log("AVPlayer.play() called")
+                }
+
+                DebugProbe.log("progress reporter starting profileIndex=\(auth.activeProfileIndex) mode=\(mode == .live ? "live" : "vod") contentId=\(content.id)")
+                let reporter = PlaybackProgressReporter(
+                    contentId: mode == .vod ? content.id : nil,
+                    channelId: mode == .live ? content.id : nil,
+                    profileIndex: auth.activeProfileIndex,
+                    player: player
+                )
+                reporter.start()
+                self.progressReporter = reporter
             }
         } catch {
             DebugProbe.log("PlayerView.load() failed: \(error.localizedDescription)")
