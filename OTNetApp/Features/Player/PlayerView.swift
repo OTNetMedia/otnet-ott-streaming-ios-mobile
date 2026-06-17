@@ -155,15 +155,18 @@ struct PlayerView: View {
                     DebugProbe.log("AVPlayer.play() called")
                 }
 
-                DebugProbe.log("progress reporter starting profileIndex=\(auth.activeProfileIndex) mode=\(mode == .live ? "live" : "vod") contentId=\(content.id)")
-                let reporter = PlaybackProgressReporter(
-                    contentId: mode == .vod ? content.id : nil,
-                    channelId: mode == .live ? content.id : nil,
-                    profileIndex: auth.activeProfileIndex,
-                    player: player
-                )
-                reporter.start()
-                self.progressReporter = reporter
+                if let analyticsToken = mint.playback.watchProgressToken {
+                    DebugProbe.log("progress reporter starting profileIndex=\(auth.activeProfileIndex) mode=\(mode == .live ? "live" : "vod") contentId=\(content.id)")
+                    let reporter = PlaybackProgressReporter(
+                        analyticsToken: analyticsToken,
+                        profileIndex: auth.activeProfileIndex,
+                        player: player
+                    )
+                    reporter.start()
+                    self.progressReporter = reporter
+                } else {
+                    DebugProbe.log("progress reporter skipped — mint did not return analyticsToken/sessionToken")
+                }
             }
         } catch {
             DebugProbe.log("PlayerView.load() failed: \(error.localizedDescription)")

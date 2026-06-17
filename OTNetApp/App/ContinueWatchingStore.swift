@@ -13,7 +13,7 @@ final class ContinueWatchingStore: ObservableObject {
             let resp = try await OTNetAPI.shared.watchProgress(profileIndex: profileIndex)
             let loaded = resp.items ?? []
             items = loaded
-            DebugProbe.log("continue-watching loaded \(loaded.count) items")
+            DebugProbe.log("continue-watching loaded \(loaded.count) items for profileIndex=\(profileIndex)")
 
             // Seed cache with any embedded Content payloads.
             var cache = contentById

@@ -1,14 +1,14 @@
 import AVFoundation
 import Foundation
 
-/// Periodically POSTs playback progress to `/telemetry/progress` via the
-/// authenticated OTNetAPI path (X-Api-Key + viewer Bearer + contentId in
-/// body) so writes route into `WatchProgress` for this viewer's profile,
-/// matching what the GET reads back.
+/// Periodically POSTs playback progress to `/telemetry/progress` using the
+/// playback session's `analyticsToken` as the Bearer. The token carries
+/// viewerId + contentId so the server can attribute the write to
+/// `WatchProgress`. Using the viewer access JWT here routes writes into a
+/// separate anonymous collection that the viewer GET never reads.
 @MainActor
 final class PlaybackProgressReporter {
-    private let contentId: String?
-    private let channelId: String?
+    private let analyticsToken: String
     private let profileIndex: Int
     private weak var player: AVPlayer?
 
@@ -16,12 +16,10 @@ final class PlaybackProgressReporter {
     private var lastSentAt: Date = .distantPast
     private let interval: TimeInterval = 15
 
-    init(contentId: String?,
-         channelId: String?,
+    init(analyticsToken: String,
          profileIndex: Int,
          player: AVPlayer) {
-        self.contentId = contentId
-        self.channelId = channelId
+        self.analyticsToken = analyticsToken
         self.profileIndex = profileIndex
         self.player = player
     }
@@ -52,19 +50,15 @@ final class PlaybackProgressReporter {
         guard now.timeIntervalSince(lastSentAt) >= 1.0 else { return }
         lastSentAt = now
 
-        let cid = contentId
-        let chid = channelId
+        let token = analyticsToken
         let pIdx = profileIndex
-        let device = Self.deviceId
         Task {
             do {
                 try await OTNetAPI.shared.postWatchProgress(
-                    contentId: cid,
-                    channelId: chid,
+                    analyticsToken: token,
                     profileIndex: pIdx,
                     progressSeconds: progress,
-                    durationSeconds: duration,
-                    deviceId: device
+                    durationSeconds: duration
                 )
                 DebugProbe.log("progress POST ok progress=\(progress) duration=\(duration)")
             } catch {
@@ -72,16 +66,4 @@ final class PlaybackProgressReporter {
             }
         }
     }
-
-    /// Stable per-install identifier, mirroring the web player's
-    /// `localStorage["otnet:deviceId"]` convention.
-    private static let deviceId: String = {
-        let key = "otnet:deviceId"
-        if let existing = UserDefaults.standard.string(forKey: key) {
-            return existing
-        }
-        let new = UUID().uuidString
-        UserDefaults.standard.set(new, forKey: key)
-        return new
-    }()
 }

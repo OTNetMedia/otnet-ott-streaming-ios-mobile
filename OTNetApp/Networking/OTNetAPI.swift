@@ -66,7 +66,11 @@ actor OTNetAPI {
         return data
     }
 
-    func post<Body: Encodable, T: Decodable>(_ path: String, body: Body) async throws -> T {
+    func post<Body: Encodable, T: Decodable>(
+        _ path: String,
+        body: Body,
+        extraHeaders: [String: String] = [:]
+    ) async throws -> T {
         let url = try makeURL(path: path)
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -75,11 +79,17 @@ actor OTNetAPI {
         if let viewerToken, viewerTokenAllowed(for: path) {
             req.setValue("Bearer \(viewerToken)", forHTTPHeaderField: "Authorization")
         }
+        for (k, v) in extraHeaders { req.setValue(v, forHTTPHeaderField: k) }
         req.httpBody = try encoder.encode(body)
         let (data, response) = try await session.data(for: req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         DebugProbe.log(url, status: status, bytes: data.count, decoded: String(describing: T.self))
-        guard (200..<300).contains(status) else { throw APIError.http(status) }
+        guard (200..<300).contains(status) else {
+            if let body = String(data: data, encoding: .utf8), !body.isEmpty {
+                DebugProbe.log("POST \(path) error body: \(body.prefix(400))")
+            }
+            throw APIError.http(status)
+        }
         do { return try decoder.decode(T.self, from: data) }
         catch { throw APIError.decoding(error) }
     }
@@ -231,37 +241,32 @@ extension OTNetAPI {
                       query: [URLQueryItem(name: "profileIndex", value: String(profileIndex))])
     }
 
-    /// Authenticated watch-progress write. Goes through the standard auth path
-    /// (X-Api-Key + viewer Bearer) and passes `contentId|channelId` in the body
-    /// so the server can route to `WatchProgress` even when the playback JWT
-    /// would otherwise route the row anonymously.
+    /// Authenticated watch-progress write. The Bearer must be the
+    /// `analyticsToken` from the matching `/playback/.../mint` response —
+    /// it's a drm_session JWT scoped to viewerId + contentId, and the
+    /// server's POST handler buckets writes into `WatchProgress` only when it
+    /// sees that token. Sending the viewer access JWT here routes the write
+    /// into a separate anonymous collection that the viewer GET never reads.
     func postWatchProgress(
-        contentId: String?,
-        channelId: String?,
+        analyticsToken: String,
         profileIndex: Int,
         progressSeconds: Int,
-        durationSeconds: Int,
-        deviceId: String
+        durationSeconds: Int
     ) async throws {
         struct Req: Encodable {
-            let contentId: String?
-            let channelId: String?
             let profileIndex: Int
             let progressSeconds: Int
             let durationSeconds: Int
-            let deviceId: String
         }
         struct Ack: Decodable { let success: Bool? }
         let _: Ack = try await post(
             "/telemetry/progress",
             body: Req(
-                contentId: contentId,
-                channelId: channelId,
                 profileIndex: profileIndex,
                 progressSeconds: progressSeconds,
-                durationSeconds: durationSeconds,
-                deviceId: deviceId
-            )
+                durationSeconds: durationSeconds
+            ),
+            extraHeaders: ["Authorization": "Bearer \(analyticsToken)"]
         )
     }
 
@@ -293,20 +298,37 @@ extension OTNetAPI {
     }
 
     /// Mint a playback session. Returns the HLS master URL conditioned for
-    /// this device, plus a session JWT for the license endpoint. Use this
-    /// instead of `variant.entrypoint` from the catalog — that's the raw
-    /// upstream (often DASH `.mpd`) and AVPlayer cannot consume it.
+    /// this device, plus a drm_session JWT (exposed as both `sessionToken`
+    /// and `analyticsToken`) used for both the license endpoint and
+    /// telemetry writes. Use this instead of `variant.entrypoint` from the
+    /// catalog — that's the raw upstream (often DASH `.mpd`) and AVPlayer
+    /// cannot consume it.
+    ///
+    /// `viewerToken` (the viewer access JWT) MUST be passed in the body when
+    /// a viewer is signed in, so the server embeds `viewerId` into the
+    /// returned drm_session JWT. Without it, telemetry writes route into
+    /// AnonymousProgress instead of the per-viewer WatchProgress collection.
     func mintPlayback(contentId: String, protocolName: String = "hls") async throws -> MintResponse {
         struct Req: Encodable {
             let contentId: String
             let `protocol`: String
+            let viewerToken: String?
         }
-        return try await post("/playback/vod/mint", body: Req(contentId: contentId, protocol: protocolName))
+        return try await post(
+            "/playback/vod/mint",
+            body: Req(contentId: contentId, protocol: protocolName, viewerToken: viewerToken)
+        )
     }
 
     func mintLive(channelId: String, protocolName: String = "hls") async throws -> MintResponse {
-        struct Req: Encodable { let `protocol`: String }
-        return try await post("/playback/live/\(channelId)/mint", body: Req(protocol: protocolName))
+        struct Req: Encodable {
+            let `protocol`: String
+            let viewerToken: String?
+        }
+        return try await post(
+            "/playback/live/\(channelId)/mint",
+            body: Req(protocol: protocolName, viewerToken: viewerToken)
+        )
     }
 
     func reportPlayerError(_ report: PlayerErrorReport) async {
@@ -336,11 +358,17 @@ struct MintResponse: Decodable {
     struct Playback: Decodable {
         let masterUrl: String
         let sessionToken: String?
+        /// drm_session JWT scoped to this playback session — carries viewerId +
+        /// contentId. Must be sent as the `Authorization: Bearer` on
+        /// `/telemetry/progress` writes; the viewer access JWT routes writes
+        /// into a different (anonymous) collection.
+        let analyticsToken: String?
         let drm: MintDrm?
         let resources: PlaybackResources?
         let adbreaks: AdBreaks?
 
         var effectiveToken: String? { sessionToken ?? drm?.token }
+        var watchProgressToken: String? { analyticsToken ?? sessionToken }
     }
 
     struct MintDrm: Decodable {
