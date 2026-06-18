@@ -60,6 +60,8 @@ struct CachedAsyncImage<Content: View>: View {
 final class ImageCache {
     static let shared = ImageCache()
     private let cache = NSCache<NSURL, UIImage>()
+    private var inflight: Set<URL> = []
+    private let inflightLock = NSLock()
 
     private init() {
         cache.countLimit = 400
@@ -77,5 +79,33 @@ final class ImageCache {
 
     func clear() {
         cache.removeAllObjects()
+    }
+
+    /// Warm the cache for the given URLs. Skips anything already cached or
+    /// already being fetched. Fire-and-forget — callers don't await results.
+    func prefetch(_ urls: [URL?]) {
+        let unique = Set(urls.compactMap { $0 })
+        for url in unique {
+            if image(for: url) != nil { continue }
+            inflightLock.lock()
+            let alreadyInflight = inflight.contains(url)
+            if !alreadyInflight { inflight.insert(url) }
+            inflightLock.unlock()
+            guard !alreadyInflight else { continue }
+
+            Task.detached(priority: .utility) { [weak self] in
+                defer {
+                    self?.inflightLock.lock()
+                    self?.inflight.remove(url)
+                    self?.inflightLock.unlock()
+                }
+                let req = URLRequest(url: url,
+                                     cachePolicy: .returnCacheDataElseLoad,
+                                     timeoutInterval: 30)
+                guard let (data, _) = try? await URLSession.shared.data(for: req),
+                      let img = UIImage(data: data) else { return }
+                await MainActor.run { self?.set(img, for: url) }
+            }
+        }
     }
 }

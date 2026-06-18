@@ -38,6 +38,23 @@ struct RefreshResponse: Codable {
     let refreshToken: String?
 }
 
+/// Returned by POST /viewer/profiles/select on success. The accessToken /
+/// refreshToken are profile-bound — store these and use them for every
+/// subsequent API call.
+struct ProfileSelectResponse: Codable {
+    let accessToken: String?
+    let refreshToken: String?
+    let profileIndex: Int?
+    let profile: ViewerProfile?
+}
+
+/// Typed errors surfaced from POST /viewer/profiles/select.
+enum ProfileSelectError: Error, Equatable {
+    case pinRequired
+    case pinIncorrect(attemptsRemaining: Int?)
+    case pinLocked(retryAfterMs: Int?, retryAt: Date?)
+}
+
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
 }

@@ -28,7 +28,9 @@ actor OTNetAPI {
 
     /// When the viewer is signed in, attach the Bearer everywhere except the
     /// FairPlay license endpoint (auth'd by the DRM session token in the
-    /// query string; sending a Bearer there can cause a 403).
+    /// query string; sending a Bearer there can cause a 403). Profile
+    /// binding lives on the Bearer JWT now — set via `/viewer/profiles/select`
+    /// — so there's no separate X-Profile-Index header to attach.
     private func viewerTokenAllowed(for path: String) -> Bool {
         let normalized = path.hasPrefix("/") ? path : "/" + path
         if normalized.contains("/playback/drm/license") { return false }
@@ -45,7 +47,10 @@ actor OTNetAPI {
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         DebugProbe.log(url, status: status, bytes: data.count, decoded: String(describing: T.self))
-        guard (200..<300).contains(status) else { throw APIError.http(status) }
+        guard (200..<300).contains(status) else {
+            if status == 402 { throw APIError.paywall(PaywallInfo.decodeFrom402(data)) }
+            throw APIError.http(status)
+        }
         do { return try decoder.decode(T.self, from: data) }
         catch { throw APIError.decoding(error) }
     }
@@ -85,6 +90,7 @@ actor OTNetAPI {
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         DebugProbe.log(url, status: status, bytes: data.count, decoded: String(describing: T.self))
         guard (200..<300).contains(status) else {
+            if status == 402 { throw APIError.paywall(PaywallInfo.decodeFrom402(data)) }
             if let body = String(data: data, encoding: .utf8), !body.isEmpty {
                 DebugProbe.log("POST \(path) error body: \(body.prefix(400))")
             }
@@ -201,6 +207,69 @@ extension OTNetAPI {
 
     func profiles() async throws -> ProfilesResponse {
         try await get("/viewer/profiles")
+    }
+
+    /// Bind the viewer's access JWT to a specific profile. The pre-select
+    /// token is "unbound" and treated as the tightest-restricted profile
+    /// (default-deny). On success the response carries fresh access/refresh
+    /// tokens scoped to that profile — replace your stored tokens with these
+    /// before any subsequent catalog / playback call.
+    ///
+    /// Throws `ProfileSelectError.pinRequired` when the target profile is
+    /// PIN-gated, `.pinIncorrect` after a bad PIN, `.pinLocked` after too
+    /// many failures.
+    func selectProfile(profileIndex: Int, pin: String? = nil) async throws -> ProfileSelectResponse {
+        struct Req: Encodable {
+            let profileIndex: Int
+            let pin: String?
+        }
+        let path = "/viewer/profiles/select"
+        let url = try makeURL(path: path)
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue(apiKey, forHTTPHeaderField: "X-Api-Key")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let viewerToken {
+            req.setValue("Bearer \(viewerToken)", forHTTPHeaderField: "Authorization")
+        }
+        req.httpBody = try encoder.encode(Req(profileIndex: profileIndex, pin: pin))
+
+        let (data, response) = try await session.data(for: req)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+        DebugProbe.log(url, status: status, bytes: data.count, decoded: "ProfileSelectResponse")
+
+        switch status {
+        case 200..<300:
+            return try decoder.decode(ProfileSelectResponse.self, from: data)
+        case 400:
+            struct E: Decodable { let pinRequired: Bool? }
+            if let e = try? decoder.decode(E.self, from: data), e.pinRequired == true {
+                throw ProfileSelectError.pinRequired
+            }
+            throw APIError.http(400)
+        case 401:
+            struct E: Decodable { let error: String?; let attemptsRemaining: Int? }
+            if let e = try? decoder.decode(E.self, from: data), e.error == "pin_incorrect" {
+                throw ProfileSelectError.pinIncorrect(attemptsRemaining: e.attemptsRemaining)
+            }
+            throw APIError.http(401)
+        case 429:
+            struct E: Decodable { let error: String?; let retryAfterMs: Int?; let retryAt: String? }
+            if let e = try? decoder.decode(E.self, from: data), e.error == "pin_locked" {
+                let date: Date? = e.retryAt.flatMap {
+                    let f = ISO8601DateFormatter()
+                    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                    return f.date(from: $0) ?? ISO8601DateFormatter().date(from: $0)
+                }
+                throw ProfileSelectError.pinLocked(retryAfterMs: e.retryAfterMs, retryAt: date)
+            }
+            throw APIError.http(429)
+        default:
+            if let body = String(data: data, encoding: .utf8), !body.isEmpty {
+                DebugProbe.log("profile select error body: \(body.prefix(300))")
+            }
+            throw APIError.http(status)
+        }
     }
 
     func createProfile(name: String, avatar: String?, kids: Bool) async throws -> ProfilesResponse {
@@ -320,6 +389,56 @@ extension OTNetAPI {
         )
     }
 
+    /// Mint a Stripe Checkout session for a paywalled title. Mirrors the
+    /// website's `/api/otnet/checkout/[contentId]` route — POST to
+    /// `/viewer/checkout/:contentId` with the viewer Bearer (OTNetAPI
+    /// attaches it) plus success/cancel URLs. Server returns a hosted
+    /// Stripe checkout URL.
+    func startCheckout(
+        contentId: String,
+        planName: String? = nil,
+        successUrl: String,
+        cancelUrl: String
+    ) async throws -> CheckoutResponse {
+        struct Req: Encodable {
+            let successUrl: String
+            let cancelUrl: String
+            let planName: String?
+        }
+        let req = Req(successUrl: successUrl, cancelUrl: cancelUrl, planName: planName)
+
+        // Do the POST manually so we can fall back to walking the raw JSON
+        // for the checkout URL — the upstream OTNet response is forwarded
+        // verbatim by the publisher's Next.js route, and historically the
+        // field name has been `url` / `checkoutUrl` / `redirectUrl` /
+        // `session.url`. Be tolerant.
+        let url = try makeURL(path: "/viewer/checkout/\(contentId)")
+        var httpReq = URLRequest(url: url)
+        httpReq.httpMethod = "POST"
+        httpReq.setValue(apiKey, forHTTPHeaderField: "X-Api-Key")
+        httpReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let viewerToken {
+            httpReq.setValue("Bearer \(viewerToken)", forHTTPHeaderField: "Authorization")
+        }
+        httpReq.httpBody = try encoder.encode(req)
+
+        let (data, response) = try await session.data(for: httpReq)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+        DebugProbe.log(url, status: status, bytes: data.count, decoded: "CheckoutResponse")
+        guard (200..<300).contains(status) else {
+            if let body = String(data: data, encoding: .utf8), !body.isEmpty {
+                DebugProbe.log("checkout error body: \(body.prefix(400))")
+            }
+            throw APIError.http(status)
+        }
+
+        let resolved = CheckoutResponse.resolve(from: data)
+        if resolved.url == nil, let body = String(data: data, encoding: .utf8) {
+            DebugProbe.log("checkout 200 but no url field found — body: \(body.prefix(400))")
+        }
+        return resolved
+    }
+
     func mintLive(channelId: String, protocolName: String = "hls") async throws -> MintResponse {
         struct Req: Encodable {
             let `protocol`: String
@@ -415,6 +534,66 @@ struct AdBreak: Decodable, Hashable, Identifiable {
     var endTime: Double? {
         guard let s = startTime, let d = duration else { return nil }
         return s + d
+    }
+}
+
+struct CheckoutResponse: Decodable {
+    let url: String?
+    let sessionId: String?
+
+    /// Walk a checkout response JSON and pick up the hosted Stripe URL
+    /// regardless of which historical field name the server used. Falls back
+    /// to the first https URL we find anywhere in the payload — Stripe
+    /// checkout URLs always start with https://checkout.stripe.com.
+    static func resolve(from data: Data) -> CheckoutResponse {
+        // Tolerant typed decode covering the field names the OTNet API and
+        // its Next.js proxies have used at various points.
+        struct Flexible: Decodable {
+            let url: String?
+            let checkoutUrl: String?
+            let redirectUrl: String?
+            let sessionUrl: String?
+            let sessionId: String?
+            let session: Nested?
+            let data: Nested?
+            struct Nested: Decodable {
+                let url: String?
+                let id: String?
+            }
+        }
+        if let f = try? JSONDecoder().decode(Flexible.self, from: data) {
+            let candidate = f.url
+                ?? f.checkoutUrl
+                ?? f.redirectUrl
+                ?? f.sessionUrl
+                ?? f.session?.url
+                ?? f.data?.url
+            let session = f.sessionId ?? f.session?.id ?? f.data?.id
+            if candidate != nil || session != nil {
+                return CheckoutResponse(url: candidate, sessionId: session)
+            }
+        }
+
+        // Last-resort: scan the raw JSON for the first checkout.stripe.com
+        // URL the server returned (the proxy historically nests it deeper).
+        if let s = String(data: data, encoding: .utf8),
+           let found = stripeURL(in: s) {
+            return CheckoutResponse(url: found, sessionId: nil)
+        }
+        return CheckoutResponse(url: nil, sessionId: nil)
+    }
+
+    private static func stripeURL(in body: String) -> String? {
+        let patterns = [
+            #"https://checkout\.stripe\.com/[A-Za-z0-9/_\-?=&%.]+"#,
+            #"https://billing\.stripe\.com/[A-Za-z0-9/_\-?=&%.]+"#
+        ]
+        for p in patterns {
+            if let range = body.range(of: p, options: .regularExpression) {
+                return String(body[range])
+            }
+        }
+        return nil
     }
 }
 

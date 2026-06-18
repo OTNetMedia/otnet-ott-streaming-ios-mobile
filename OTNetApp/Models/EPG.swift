@@ -43,6 +43,13 @@ struct EPGProgram: Codable, Identifiable {
     let contentId: String?
     let content: EPGProgramContent?
 
+    // Pre-parsed at decode time so the EPG grid doesn't hit
+    // `ISO8601DateFormatter.date(from:)` per tile per render. With dozens of
+    // tiles × many channels × frequent re-renders, that was meaningful CPU.
+    let startDate: Date?
+    let endDate: Date?
+    let thumbnailURL: URL?
+
     var displayTitle: String {
         content?.title?.nilIfBlank
             ?? programName?.nilIfBlank
@@ -54,20 +61,34 @@ struct EPGProgram: Codable, Identifiable {
         content?.description?.nilIfBlank ?? description?.nilIfBlank
     }
 
-    var thumbnailURL: URL? {
-        content?.thumbnail?.nilIfBlank.flatMap(URL.init(string:))
+    enum CodingKeys: String, CodingKey {
+        case _id, title, programName, description
+        case startTime, endTime, durationSeconds, contentId, content
     }
 
-    var startDate: Date? {
-        startTime.flatMap(EPGProgram.iso.date(from:))
-    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self._id = try c.decodeIfPresent(String.self, forKey: ._id)
+        self.title = try c.decodeIfPresent(String.self, forKey: .title)
+        self.programName = try c.decodeIfPresent(String.self, forKey: .programName)
+        self.description = try c.decodeIfPresent(String.self, forKey: .description)
+        self.startTime = try c.decodeIfPresent(String.self, forKey: .startTime)
+        self.endTime = try c.decodeIfPresent(String.self, forKey: .endTime)
+        self.durationSeconds = try c.decodeIfPresent(Int.self, forKey: .durationSeconds)
+        self.contentId = try c.decodeIfPresent(String.self, forKey: .contentId)
+        let content = try c.decodeIfPresent(EPGProgramContent.self, forKey: .content)
+        self.content = content
 
-    var endDate: Date? {
-        if let endTime, let d = EPGProgram.iso.date(from: endTime) { return d }
-        if let s = startDate, let dur = durationSeconds {
-            return s.addingTimeInterval(TimeInterval(dur))
+        let parsedStart = self.startTime.flatMap(EPGProgram.iso.date(from:))
+        self.startDate = parsedStart
+        if let endTime = self.endTime, let d = EPGProgram.iso.date(from: endTime) {
+            self.endDate = d
+        } else if let s = parsedStart, let dur = self.durationSeconds {
+            self.endDate = s.addingTimeInterval(TimeInterval(dur))
+        } else {
+            self.endDate = nil
         }
-        return nil
+        self.thumbnailURL = content?.thumbnail?.nilIfBlank.flatMap(URL.init(string:))
     }
 
     private static let iso: ISO8601DateFormatter = {

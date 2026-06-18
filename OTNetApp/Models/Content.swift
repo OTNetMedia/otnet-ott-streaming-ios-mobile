@@ -296,10 +296,67 @@ struct PersonRef: Codable, Hashable {
     }
 }
 
-struct PaywallInfo: Codable {
-    let mode: String?
-    let price: Double?
+/// Mirrors the `PaywallBlock` shape the OTNet website uses (lib/types.ts).
+/// Used both inline on `Content` (catalog response) and as the body of any
+/// 402 Payment Required server response.
+struct PaywallInfo: Codable, Equatable {
+    let mode: String?           // "svod" | "ppv" | "rental"
+    let reason: String?         // "signin_required" | "no_subscription" | "wrong_plan" | "not_purchased" | "expired"
+    let description: String?
+    let detail: PaywallDetail?
+
+    var ctaLabel: String {
+        if reason == "signin_required" { return "Sign in to watch" }
+        let amount = detail?.amount
+        let currency = detail?.currency
+        let priceStr = PaywallInfo.formatPrice(amount: amount, currency: currency)
+        switch mode {
+        case "ppv":
+            return priceStr.map { "Buy for \($0)" } ?? "Buy"
+        case "rental":
+            let base = priceStr.map { "Rent for \($0)" } ?? "Rent"
+            if let h = detail?.windowHours, h > 0 { return "\(base) · \(h)h" }
+            return base
+        default:
+            switch reason {
+            case "wrong_plan": return "Upgrade plan"
+            case "expired":    return "Rent again"
+            default:           return "Subscribe to watch"
+            }
+        }
+    }
+
+    var headline: String {
+        switch reason {
+        case "signin_required": return "Sign in to watch"
+        case "no_subscription": return "Subscription required"
+        case "wrong_plan":      return "Plan upgrade required"
+        case "not_purchased":   return mode == "rental" ? "Rental required" : "Purchase required"
+        case "expired":         return "Your rental has expired"
+        default:                return "Subscription required"
+        }
+    }
+
+    private static func formatPrice(amount: Double?, currency: String?) -> String? {
+        // Server sends amounts in minor units (pennies / cents) — matches the
+        // website's lib/types.ts `formatPrice` which divides by 100 before
+        // formatting. 999 + GBP → "£9.99".
+        guard let amount else { return nil }
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.locale = Locale(identifier: "en_GB")
+        if let c = currency, !c.isEmpty { formatter.currencyCode = c.uppercased() }
+        return formatter.string(from: NSNumber(value: amount / 100))
+    }
+}
+
+struct PaywallDetail: Codable, Equatable {
+    let amount: Double?
     let currency: String?
+    let windowHours: Int?
+    let plans: [String]?
+    let planNames: [String]?
+    let currentPlan: String?
 }
 
 struct MonetizationInfo: Codable {

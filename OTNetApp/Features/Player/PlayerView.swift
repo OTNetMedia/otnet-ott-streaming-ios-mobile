@@ -23,6 +23,7 @@ struct PlayerView: View {
         case loading
         case ready(AVPlayer, MintResponse.Playback)
         case error(String)
+        case paywall(PaywallInfo?)
     }
 
     var body: some View {
@@ -46,7 +47,14 @@ struct PlayerView: View {
                     adBreaks: playback.adbreaks?.breaks ?? [],
                     blockAdSkipping: (playback.adbreaks?.blockSkipping ?? false)
                         || (settingsStore.settings?.blockAdSkipping ?? false),
-                    onDismiss: { dismiss() }
+                    onDismiss: {
+                        // Rotate back to portrait first so the dismiss animation
+                        // doesn't show a jumbled landscape→portrait transition.
+                        OrientationManager.shared.lock(.portrait, rotateTo: .portrait)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                            dismiss()
+                        }
+                    }
                 )
             case .error(let message):
                 VStack(spacing: 16) {
@@ -64,6 +72,16 @@ struct PlayerView: View {
                         .padding(.vertical, 10)
                         .background(.white, in: Capsule())
                 }
+            case .paywall(let info):
+                PaywallSurface(
+                    content: content,
+                    info: info,
+                    onDismiss: { dismiss() },
+                    onPurchaseConfirmed: {
+                        state = .loading
+                        Task { await load() }
+                    }
+                )
             }
         }
         .task(id: content.id) { await load() }
@@ -168,6 +186,9 @@ struct PlayerView: View {
                     DebugProbe.log("progress reporter skipped — mint did not return analyticsToken/sessionToken")
                 }
             }
+        } catch let APIError.paywall(info) {
+            DebugProbe.log("PlayerView.load() paywall mode=\(info?.mode ?? "?") reason=\(info?.reason ?? "?")")
+            await MainActor.run { state = .paywall(info) }
         } catch {
             DebugProbe.log("PlayerView.load() failed: \(error.localizedDescription)")
             await reportError(code: "mint-failure",

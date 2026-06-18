@@ -3,12 +3,14 @@ import SwiftUI
 struct ContentDetailView: View {
     let content: Content
     @State private var showingPlayer = false
+    @State private var showingPaywall = false
     @StateObject private var vm = ContentDetailViewModel()
     @EnvironmentObject private var myList: MyListStore
     @EnvironmentObject private var auth: AuthStore
     @EnvironmentObject private var settingsStore: SettingsStore
 
     private var displayed: Content { vm.detail ?? content }
+    private var isPaywalled: Bool { displayed.entitled == false && displayed.paywall != nil }
     private var viewerAuthRequired: Bool { !(settingsStore.settings?.viewerAuthNone ?? false) }
     private var canUseList: Bool { viewerAuthRequired && auth.isSignedIn }
 
@@ -74,6 +76,20 @@ struct ContentDetailView: View {
         .fullScreenCover(isPresented: $showingPlayer) {
             PlayerView(content: displayed)
                 .ignoresSafeArea()
+        }
+        .fullScreenCover(isPresented: $showingPaywall) {
+            PaywallSurface(
+                content: displayed,
+                info: displayed.paywall,
+                onDismiss: { showingPaywall = false },
+                onPurchaseConfirmed: {
+                    showingPaywall = false
+                    Task {
+                        await vm.load(content.id)
+                        await MainActor.run { showingPlayer = true }
+                    }
+                }
+            )
         }
         .navigationDestination(for: Content.self) { ContentDetailView(content: $0) }
         .navigationDestination(for: CastAndCrewRoute.self) { _ in
@@ -154,7 +170,13 @@ struct ContentDetailView: View {
 
     private var playButton: some View {
         HStack(spacing: 12) {
-            PlayButton { showingPlayer = true }
+            if isPaywalled {
+                PaywallCTAButton(paywall: displayed.paywall) {
+                    showingPaywall = true
+                }
+            } else {
+                PlayButton { showingPlayer = true }
+            }
 
             if canUseList {
                 MyListButton(

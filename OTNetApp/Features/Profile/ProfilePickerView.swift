@@ -65,8 +65,27 @@ struct ProfilePickerView: View {
                     ProfileEditView(mode: .edit(index: idx, profile: profile))
                 }
             }
+            .sheet(isPresented: pinSheetBinding) {
+                PinEntrySheet()
+                    .presentationDetents([.medium, .large])
+            }
+            .onChange(of: auth.activeProfileIndex) { _ in
+                // Auth store flipped the active profile (post-select success);
+                // close the picker so the user sees the home grid for the new
+                // profile without an extra tap.
+                if !managing && auth.pinPromptForIndex == nil { dismiss() }
+            }
         }
         .task { await auth.refreshProfiles() }
+    }
+
+    private var pinSheetBinding: Binding<Bool> {
+        Binding(
+            get: { auth.pinPromptForIndex != nil },
+            set: { presenting in
+                if !presenting { auth.cancelProfilePin() }
+            }
+        )
     }
 
     private func tile(for profile: ViewerProfile, index: Int) -> some View {
@@ -74,8 +93,12 @@ struct ProfilePickerView: View {
             if managing {
                 editingProfile = .existing(index, profile)
             } else {
+                // Profile selection is now async (server mints a
+                // profile-bound token). Don't dismiss synchronously — the
+                // .onChange(of:) above closes the picker once the server
+                // confirms the switch, and if the profile is PIN-gated the
+                // pin sheet pops up first.
                 auth.setActiveProfile(index: index)
-                dismiss()
             }
         } label: {
             VStack(spacing: 8) {

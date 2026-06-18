@@ -15,7 +15,7 @@ struct HomeView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: OTNetTheme.rowGap) {
+            LazyVStack(alignment: .leading, spacing: OTNetTheme.rowGap) {
                 switch vm.phase {
                 case .loading:
                     StatePlaceholder(mode: .loading).frame(height: 400)

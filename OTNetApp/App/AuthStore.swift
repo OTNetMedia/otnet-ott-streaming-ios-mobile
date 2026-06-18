@@ -9,6 +9,13 @@ final class AuthStore: ObservableObject {
     @Published private(set) var profiles: [ViewerProfile] = []
     @Published private(set) var activeProfileIndex: Int = 0
 
+    // PIN-gated profile switch state, observed by ProfilePickerView /
+    // PinEntrySheet so the user can complete the parental-control check.
+    @Published var pinPromptForIndex: Int?
+    @Published var pinError: String?
+    @Published var pinLockedUntil: Date?
+    @Published var pinSwitchInFlight: Bool = false
+
     private(set) var accessToken: String?
     private(set) var refreshToken: String?
 
@@ -32,10 +39,74 @@ final class AuthStore: ObservableObject {
         activeProfileIndex = UserDefaults.standard.integer(forKey: activeProfileDefaultsKey)
     }
 
+    /// Switch the active profile. Asks the server to mint a profile-bound
+    /// access token via /viewer/profiles/select; surfaces PIN state via the
+    /// `pinPromptForIndex` / `pinError` / `pinLockedUntil` publishers so the
+    /// UI can present a PIN entry sheet and call `submitProfilePin(_:)`.
     func setActiveProfile(index: Int) {
         guard index >= 0, index < profiles.count else { return }
-        activeProfileIndex = index
-        UserDefaults.standard.set(index, forKey: activeProfileDefaultsKey)
+        // Don't optimistically flip activeProfileIndex — the binding only
+        // counts when the server hands back the new token. Otherwise a
+        // failed PIN check would leave the UI showing the wrong profile.
+        Task { await performProfileSelect(targetIndex: index, pin: nil) }
+    }
+
+    /// Continue a PIN-gated switch after the user types their 4-digit PIN.
+    func submitProfilePin(_ pin: String) {
+        guard let target = pinPromptForIndex else { return }
+        Task { await performProfileSelect(targetIndex: target, pin: pin) }
+    }
+
+    /// Dismiss the PIN sheet without switching (user cancels).
+    func cancelProfilePin() {
+        pinPromptForIndex = nil
+        pinError = nil
+    }
+
+    private func performProfileSelect(targetIndex: Int, pin: String?) async {
+        pinSwitchInFlight = true
+        defer { pinSwitchInFlight = false }
+        do {
+            let resp = try await OTNetAPI.shared.selectProfile(profileIndex: targetIndex, pin: pin)
+            // Replace stored tokens with the profile-bound pair.
+            if let access = resp.accessToken {
+                accessToken = access
+                KeychainStore.set(access, for: Key.access)
+                await OTNetAPI.shared.setViewerToken(access)
+            }
+            if let refresh = resp.refreshToken {
+                refreshToken = refresh
+                KeychainStore.set(refresh, for: Key.refresh)
+            }
+            // Apply the (possibly server-clamped) profile index.
+            let confirmed = resp.profileIndex ?? targetIndex
+            activeProfileIndex = confirmed
+            UserDefaults.standard.set(confirmed, forKey: activeProfileDefaultsKey)
+            pinPromptForIndex = nil
+            pinError = nil
+            pinLockedUntil = nil
+        } catch ProfileSelectError.pinRequired {
+            pinPromptForIndex = targetIndex
+            pinError = nil
+            pinLockedUntil = nil
+        } catch ProfileSelectError.pinIncorrect(let remaining) {
+            pinPromptForIndex = targetIndex
+            if let n = remaining, n > 0 {
+                pinError = "Incorrect PIN. \(n) \(n == 1 ? "try" : "tries") left."
+            } else {
+                pinError = "Incorrect PIN."
+            }
+        } catch ProfileSelectError.pinLocked(_, let retryAt) {
+            pinPromptForIndex = targetIndex
+            pinLockedUntil = retryAt
+            pinError = "Too many attempts. Try again shortly."
+        } catch {
+            DebugProbe.log("profile select failed: \(error.localizedDescription)")
+            pinPromptForIndex = nil
+            pinError = nil
+            pinLockedUntil = nil
+            lastError = "Couldn't switch profile: \(error.localizedDescription)"
+        }
     }
 
     func refreshProfiles() async {
@@ -164,6 +235,16 @@ final class AuthStore: ObservableObject {
         }
         await OTNetAPI.shared.setViewerToken(access)
         await refreshProfiles()
+
+        // The login token is "unbound" — catalog / playback calls made with
+        // it default to the tightest-restricted profile. Bind to the
+        // viewer's cached active profile right away so browse and playback
+        // reflect their selection. If that profile is PIN-gated, the
+        // performProfileSelect call surfaces the PIN sheet on the picker.
+        let target = min(max(0, activeProfileIndex), max(0, profiles.count - 1))
+        if !profiles.isEmpty {
+            await performProfileSelect(targetIndex: target, pin: nil)
+        }
     }
 
     private func refresh(using token: String) async {
