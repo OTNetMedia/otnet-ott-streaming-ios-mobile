@@ -14,7 +14,8 @@ struct PinEntrySheet: View {
     var body: some View {
         VStack(spacing: 0) {
             handle
-            VStack(spacing: 24) {
+            Spacer(minLength: 0)
+            VStack(spacing: 28) {
                 header
                 pinDisplay
                 if let lockMessage {
@@ -33,14 +34,14 @@ struct PinEntrySheet: View {
                     auth.cancelProfilePin()
                     dismiss()
                 }
-                .font(.subheadline)
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(OTNetTheme.textSecondary)
             }
             .padding(.horizontal, 28)
-            .padding(.top, 12)
-            .padding(.bottom, 32)
+            Spacer(minLength: 0)
         }
-        .background(OTNetTheme.card.ignoresSafeArea())
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(OTNetTheme.background.ignoresSafeArea())
         .onChange(of: auth.pinPromptForIndex) { newValue in
             if newValue == nil { dismiss() }
         }
@@ -51,19 +52,24 @@ struct PinEntrySheet: View {
 
     private var handle: some View {
         Capsule()
-            .fill(.white.opacity(0.25))
-            .frame(width: 38, height: 4)
+            .fill(.white.opacity(0.3))
+            .frame(width: 44, height: 5)
             .padding(.top, 10)
-            .padding(.bottom, 14)
+            .padding(.bottom, 8)
     }
 
     private var header: some View {
-        VStack(spacing: 6) {
-            Image(systemName: "lock.shield.fill")
-                .font(.system(size: 28, weight: .semibold))
-                .foregroundStyle(OTNetTheme.primary)
+        VStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(OTNetTheme.primary.opacity(0.18))
+                    .frame(width: 64, height: 64)
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(OTNetTheme.primary)
+            }
             Text(profileNameLine)
-                .font(.headline.bold())
+                .font(.title3.bold())
                 .foregroundStyle(OTNetTheme.textPrimary)
             Text("Enter the PIN to switch profiles.")
                 .font(.subheadline)

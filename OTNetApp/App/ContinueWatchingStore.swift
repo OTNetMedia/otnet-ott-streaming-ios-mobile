@@ -56,6 +56,16 @@ final class ContinueWatchingStore: ObservableObject {
                 for (cid, c) in fetched { hydrated[cid] = c }
                 contentById = hydrated
             }
+
+            // Warm the image cache so the row never shows blank placeholders
+            // while a CDN fetch is in flight.
+            var urls: [URL?] = []
+            for (_, c) in contentById {
+                urls.append(c.backdropURL)
+                urls.append(c.landscapeURL)
+                urls.append(c.posterURL)
+            }
+            ImageCache.shared.prefetch(urls)
         } catch {
             // Don't clear the cache on transient errors / cancellations.
             if (error as NSError).code == NSURLErrorCancelled { return }

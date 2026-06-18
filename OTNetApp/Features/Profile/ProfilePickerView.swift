@@ -67,7 +67,8 @@ struct ProfilePickerView: View {
             }
             .sheet(isPresented: pinSheetBinding) {
                 PinEntrySheet()
-                    .presentationDetents([.medium, .large])
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.hidden)
             }
             .onChange(of: auth.activeProfileIndex) { _ in
                 // Auth store flipped the active profile (post-select success);
