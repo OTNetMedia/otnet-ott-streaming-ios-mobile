@@ -154,10 +154,13 @@ extension OTNetAPI {
     }
 
     func contentForPerson(_ personId: String, page: Int = 1, limit: Int = 30) async throws -> CategoryPage {
+        // Server filter key is `personnelId`, not `personId` — the wrong key
+        // was silently ignored and we'd get back the full unfiltered catalog,
+        // which is why every actor's "Also appears in" looked identical.
         let q = [
-            URLQueryItem(name: "personId", value: personId),
-            URLQueryItem(name: "page",     value: String(page)),
-            URLQueryItem(name: "limit",    value: String(limit)),
+            URLQueryItem(name: "personnelId", value: personId),
+            URLQueryItem(name: "page",        value: String(page)),
+            URLQueryItem(name: "limit",       value: String(limit)),
         ]
         return try await get("/catalog/content", query: q)
     }
